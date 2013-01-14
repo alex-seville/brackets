@@ -30,8 +30,11 @@
  */
 define(function (require, exports, module) {
     "use strict";
+
+    require("utils/Global");
     
     var NativeFileSystem    = require("file/NativeFileSystem").NativeFileSystem,
+        NativeFileError     = require("file/NativeFileError"),
         PerfUtils           = require("utils/PerfUtils"),
         Dialogs             = require("widgets/Dialogs"),
         Strings             = require("strings"),
@@ -42,7 +45,7 @@ define(function (require, exports, module) {
     /**
      * Asynchronously reads a file as UTF-8 encoded text.
      * @return {$.Promise} a jQuery promise that will be resolved with the 
-     *  file's text content plus its timestamp, or rejected with a FileError if
+     *  file's text content plus its timestamp, or rejected with a NativeFileError if
      *  the file can not be read.
      */
     function readAsText(fileEntry) {
@@ -86,7 +89,7 @@ define(function (require, exports, module) {
      * @param {!FileEntry} fileEntry
      * @param {!string} text
      * @return {$.Promise} a jQuery promise that will be resolved when
-     * file writing completes, or rejected with a FileError.
+     * file writing completes, or rejected with a NativeFileError.
      */
     function writeText(fileEntry, text) {
         var result = new $.Deferred();
@@ -154,32 +157,32 @@ define(function (require, exports, module) {
         return text.replace(findAnyEol, eolStr);
     }
 
-    function getFileErrorString(code) {
+    function getFileErrorString(name) {
         // There are a few error codes that we have specific error messages for. The rest are
         // displayed with a generic "(error N)" message.
         var result;
 
-        if (code === FileError.NOT_FOUND_ERR) {
+        if (name === NativeFileError.NOT_FOUND_ERR) {
             result = Strings.NOT_FOUND_ERR;
-        } else if (code === FileError.NOT_READABLE_ERR) {
+        } else if (name === NativeFileError.NOT_READABLE_ERR) {
             result = Strings.NOT_READABLE_ERR;
-        } else if (code === FileError.NO_MODIFICATION_ALLOWED_ERR) {
+        } else if (name === NativeFileError.NO_MODIFICATION_ALLOWED_ERR) {
             result = Strings.NO_MODIFICATION_ALLOWED_ERR_FILE;
         } else {
-            result = StringUtils.format(Strings.GENERIC_ERROR, code);
+            result = StringUtils.format(Strings.GENERIC_ERROR, name);
         }
 
         return result;
     }
     
-    function showFileOpenError(code, path) {
+    function showFileOpenError(name, path) {
         return Dialogs.showModalDialog(
             Dialogs.DIALOG_ID_ERROR,
             Strings.ERROR_OPENING_FILE_TITLE,
             StringUtils.format(
                 Strings.ERROR_OPENING_FILE,
                 StringUtils.htmlEscape(path),
-                getFileErrorString(code)
+                getFileErrorString(name)
             )
         );
     }
@@ -200,6 +203,19 @@ define(function (require, exports, module) {
         
         return path;
     }
+    
+    /**
+     * Canonicalizes a folder path to not include a trailing slash.
+     * @param {string} path
+     * @return {string}
+     */
+    function canonicalizeFolderPath(path) {
+        if (path.length > 0 && path[path.length - 1] === "/") {
+            return path.slice(0, -1);
+        } else {
+            return path;
+        }
+    }
 
     /**
      * Returns a native absolute path to the 'brackets' source directory.
@@ -215,36 +231,86 @@ define(function (require, exports, module) {
     
     /**
      * Given the module object passed to JS module define function,
-     * convert the path (which is relative to the current window)
-     * to a native absolute path.
+     * convert the path to a native absolute path.
      * Returns a native absolute path to the module folder.
      * @return {string}
      */
     function getNativeModuleDirectoryPath(module) {
-        var path, relPath, index, pathname;
-
+        var path;
+        
         if (module && module.uri) {
-
-            // Remove window name from base path. Maintain trailing slash.
-            pathname = decodeURI(window.location.pathname);
-            path = convertToNativePath(pathname.substr(0, pathname.lastIndexOf("/") + 1));
-
-            // Remove module name from relative path. Remove trailing slash.
-            pathname = decodeURI(module.uri);
-            relPath = pathname.substr(0, pathname.lastIndexOf("/"));
-
-            // handle leading "../" in relative directory
-            while (relPath.substr(0, 3) === "../") {
-                path = path.substr(0, path.length - 1); // strip trailing slash from base path
-                index = path.lastIndexOf("/");          // find next slash from end
-                if (index !== -1) {
-                    path = path.substr(0, index + 1);   // remove last dir while maintaining slash
-                }
-                relPath = relPath.substr(3);            // remove leading "../" from relative path
-            }
-            path += relPath;
+            path = decodeURI(module.uri);
+            
+            // Remove module name and trailing slash from path.
+            path = path.substr(0, path.lastIndexOf("/"));
         }
         return path;
+    }
+    
+    /**
+     * Update a file entry path after a file/folder name change.
+     * @param {FileEntry} entry The FileEntry or DirectoryEntry to update
+     * @param {string} oldName The full path of the old name
+     * @param {string} newName The full path of the new name
+     * @return {boolean} Returns true if the file entry was updated
+     */
+    function updateFileEntryPath(entry, oldName, newName) {
+        if (entry.fullPath.indexOf(oldName) === 0) {
+            var fullPath = entry.fullPath.replace(oldName, newName);
+            
+            entry.fullPath = fullPath;
+            
+            // TODO: Should this be a method on Entry instead?
+            entry.name = null; // default if extraction fails
+            if (fullPath) {
+                var pathParts = fullPath.split("/");
+                
+                // Extract name from the end of the fullPath (account for trailing slash(es))
+                while (!entry.name && pathParts.length) {
+                    entry.name = pathParts.pop();
+                }
+            }
+            
+            return true;
+        }
+        
+        return false;
+    }
+
+    /** @const - hard-coded for now, but may want to make these preferences */
+    var _staticHtmlFileExts = ["htm", "html"],
+        _serverHtmlFileExts = ["php", "php3", "php4", "php5", "phtm", "phtml", "cfm", "cfml", "asp", "aspx", "jsp", "jspx", "shtm", "shtml"];
+
+    /**
+     * Determine if file extension is a static html file extension.
+     * @param {String} file name with extension or just a file extension
+     * @return {Boolean} Returns true if fileExt is in the list
+     */
+    function isStaticHtmlFileExt(fileExt) {
+        if (!fileExt) {
+            return false;
+        }
+
+        var i = fileExt.lastIndexOf("."),
+            ext = (i === -1 || i >= fileExt.length - 1) ? fileExt : fileExt.substr(i + 1);
+
+        return (_staticHtmlFileExts.indexOf(ext.toLowerCase()) !== -1);
+    }
+
+    /**
+     * Determine if file extension is a server html file extension.
+     * @param {String} file name with extension or just a file extension
+     * @return {Boolean} Returns true if fileExt is in the list
+     */
+    function isServerHtmlFileExt(fileExt) {
+        if (!fileExt) {
+            return false;
+        }
+
+        var i = fileExt.lastIndexOf("."),
+            ext = (i === -1 || i >= fileExt.length - 1) ? fileExt : fileExt.substr(i + 1);
+
+        return (_serverHtmlFileExts.indexOf(ext.toLowerCase()) !== -1);
     }
 
     // Define public API
@@ -260,4 +326,8 @@ define(function (require, exports, module) {
     exports.convertToNativePath            = convertToNativePath;
     exports.getNativeBracketsDirectoryPath = getNativeBracketsDirectoryPath;
     exports.getNativeModuleDirectoryPath   = getNativeModuleDirectoryPath;
+    exports.canonicalizeFolderPath         = canonicalizeFolderPath;
+    exports.updateFileEntryPath            = updateFileEntryPath;
+    exports.isStaticHtmlFileExt            = isStaticHtmlFileExt;
+    exports.isServerHtmlFileExt            = isServerHtmlFileExt;
 });

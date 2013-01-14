@@ -81,7 +81,7 @@ define(function (require, exports, module) {
     
     /**
      * @constructor
-     * @param {Array.<{name:String,document:Document,startLine:number,endLine:number}>} ranges The text ranges to display.
+     * @param {Array.<{name:String,document:Document,lineStart:number,lineEnd:number}>} ranges The text ranges to display.
      * @extends {InlineTextEditor}
      */
     function MultiRangeInlineEditor(ranges) {
@@ -95,7 +95,7 @@ define(function (require, exports, module) {
         
         this._selectedRangeIndex = -1;
     }
-    MultiRangeInlineEditor.prototype = new InlineTextEditor();
+    MultiRangeInlineEditor.prototype = Object.create(InlineTextEditor.prototype);
     MultiRangeInlineEditor.prototype.constructor = MultiRangeInlineEditor;
     MultiRangeInlineEditor.prototype.parentClass = InlineTextEditor.prototype;
     
@@ -113,7 +113,7 @@ define(function (require, exports, module) {
      * 
      */
     MultiRangeInlineEditor.prototype.load = function (hostEditor) {
-        this.parentClass.load.call(this, hostEditor);
+        MultiRangeInlineEditor.prototype.parentClass.load.apply(this, arguments);
         
         // Container to hold all editors
         var self = this;
@@ -146,25 +146,24 @@ define(function (require, exports, module) {
         
         // create range list & add listeners for range textrange changes
         var rangeItemText;
-        this._ranges.forEach(function (range, i) {
+        this._ranges.forEach(function (range) {
             // Create list item UI
             var $rangeItem = $(window.document.createElement("li")).appendTo($rangeList);
             _updateRangeLabel($rangeItem, range);
             $rangeItem.mousedown(function () {
-                self.setSelectedIndex(i);
+                self.setSelectedIndex(self._ranges.indexOf(range));
             });
 
-            self._ranges[i].$listItem = $rangeItem;
+            range.$listItem = $rangeItem;
             
             // Update list item as TextRange changes
-            $(self._ranges[i].textRange).on("change", function () {
+            $(range.textRange).on("change", function () {
                 _updateRangeLabel($rangeItem, range);
             });
             
-            // If TextRange lost sync, react just as we do for an inline Editor's lostContent event:
-            // close the whole inline widget
-            $(self._ranges[i].textRange).on("lostSync", function () {
-                self.close();
+            // If TextRange lost sync, remove it from the list (and close the widget if no other ranges are left)
+            $(range.textRange).on("lostSync", function () {
+                self._removeRange(range);
             });
         });
         
@@ -207,10 +206,10 @@ define(function (require, exports, module) {
         }
 
         // Remove selected class(es)
-        var previousItem = (this._selectedRangeIndex >= 0) ? this._ranges[this._selectedRangeIndex].$listItem : null;
+        var $previousItem = (this._selectedRangeIndex >= 0) ? this._ranges[this._selectedRangeIndex].$listItem : null;
         
-        if (previousItem) {
-            previousItem.toggleClass("selected", false);
+        if ($previousItem) {
+            $previousItem.toggleClass("selected", false);
         }
         
         this._selectedRangeIndex = newIndex;
@@ -245,10 +244,49 @@ define(function (require, exports, module) {
 
         
         this.editors[0].refresh();
+        
         // ensureVisibility is set to false because we don't want to scroll the main editor when the user selects a view
         this.sizeInlineWidgetToContents(true, false);
         this._updateRelatedContainer();
 
+        this._updateSelectedMarker();
+    };
+
+    MultiRangeInlineEditor.prototype._removeRange = function (range) {
+        // If this is the last range, just close the whole widget
+        if (this._ranges.length <= 1) {
+            this.close();
+            return;
+        }
+
+        // Now we know there is at least one other range -> found out which one this is
+        var index = this._ranges.indexOf(range);
+        
+        // If the range to be removed is the selected one, first switch to another one
+        if (index === this._selectedRangeIndex) {
+            // If possible, select the one below, else select the one above
+            if (index + 1 < this._ranges.length) {
+                this.setSelectedIndex(index + 1);
+            } else {
+                this.setSelectedIndex(index - 1);
+            }
+        }
+
+        // Now we can remove this range
+        range.$listItem.remove();
+        range.textRange.dispose();
+        this._ranges.splice(index, 1);
+
+        // If the selected range is below, we need to update the index
+        if (index < this._selectedRangeIndex) {
+            this._selectedRangeIndex--;
+            this._updateSelectedMarker();
+        }
+    };
+
+    MultiRangeInlineEditor.prototype._updateSelectedMarker = function () {
+        var $rangeItem = this._ranges[this._selectedRangeIndex].$listItem;
+        
         // scroll the selection to the rangeItem, use setTimeout to wait for DOM updates
         var self = this;
         window.setTimeout(function () {
@@ -281,7 +319,8 @@ define(function (require, exports, module) {
      * Called any time inline is closed, whether manually (via closeThisInline()) or automatically
      */
     MultiRangeInlineEditor.prototype.onClosed = function () {
-        this.parentClass.onClosed.call(this); // super.onClosed()
+        // Superclass onClosed() destroys editor
+        MultiRangeInlineEditor.prototype.parentClass.onClosed.apply(this, arguments);
         
         // remove resize handlers for relatedContainer
         $(this.hostEditor).off("change", this._updateRelatedContainer);
@@ -377,17 +416,6 @@ define(function (require, exports, module) {
 
         // Add extra padding to the right edge of the widget to account for the range list.
         this.$htmlContent.css("padding-right", this.$relatedContainer.outerWidth() + "px");
-        
-        // Set the minimum width of the widget (which doesn't include the padding) to the width
-        // of CodeMirror's linespace, so that the total width will be at least as large as the
-        // width of the host editor's code plus the padding for the range list. We need to do this
-        // rather than just setting min-width to 100% because adding padding for the range list
-        // actually pushes out the width of the container, so we would end up continuously
-        // growing the overall width.
-        // This is a bit of a hack since it relies on knowing some detail about the innards of CodeMirror.
-        var lineSpace = this.hostEditor._getLineSpaceElement(),
-            minWidth = $(lineSpace).offset().left - this.$htmlContent.offset().left + lineSpace.scrollWidth;
-        this.$htmlContent.css("min-width", minWidth + "px");
     };
     
     /**
@@ -430,6 +458,17 @@ define(function (require, exports, module) {
     };
 
     /**
+     * Overwrite InlineTextEditor's _onLostContent to do nothing if the document's file is deleted
+     * (deletes are handled via TextRange's lostSync).
+     */
+    MultiRangeInlineEditor.prototype._onLostContent = function (event, cause) {
+        // Ignore when the editor's content got lost due to a deleted file
+        if (cause && cause.type === "deleted") { return; }
+        // Else yield to the parent's implementation
+        return MultiRangeInlineEditor.prototype.parentClass._onLostContent.apply(this, arguments);
+    };
+
+    /**
      * @return {Array.<SearchResultItem>}
      */
     MultiRangeInlineEditor.prototype._getRanges = function () {
@@ -465,13 +504,28 @@ define(function (require, exports, module) {
      */
     MultiRangeInlineEditor.prototype.sizeInlineWidgetToContents = function (force, ensureVisibility) {
         // Size the code mirror editors height to the editor content
-        this.parentClass.sizeInlineWidgetToContents.call(this, force);
+        // We use "call" rather than "apply" here since ensureVisibility was an argument added just for this override.
+        MultiRangeInlineEditor.prototype.parentClass.sizeInlineWidgetToContents.call(this, force);
         // Size the widget height to the max between the editor content and the related ranges list
         var widgetHeight = Math.max(this.$relatedContainer.find(".related").height(), this.$editorsDiv.height());
         this.hostEditor.setInlineWidgetHeight(this, widgetHeight, ensureVisibility);
 
         // The related ranges container size itself based on htmlContent which is set by setInlineWidgetHeight above.
+        // Use setTimeout to trigger a layout update before accessing positions, heights, etc.
+        window.setTimeout(this._updateRelatedContainer);
+    };
+    
+    /**
+     * Refreshes the height of the inline editor and all child editors.
+     * @override
+     */
+    MultiRangeInlineEditor.prototype.refresh = function () {
+        MultiRangeInlineEditor.prototype.parentClass.refresh.apply(this, arguments);
+        this.sizeInlineWidgetToContents(true);
         this._updateRelatedContainer();
+        this.editors.forEach(function (editor, j, arr) {
+            editor.refresh();
+        });
     };
 
     /**
@@ -479,18 +533,12 @@ define(function (require, exports, module) {
      * @returns {MultiRangeInlineEditor}
      */
     function _getFocusedMultiRangeInlineEditor() {
-        
-        var focusedMultiRangeInlineEditor = null,
-            result = EditorManager.getFocusedInlineWidget();
-        
-        if (result) {
-            var focusedWidget = result.widget;
-            if (focusedWidget && focusedWidget instanceof MultiRangeInlineEditor) {
-                focusedMultiRangeInlineEditor = focusedWidget;
-            }
+        var focusedWidget = EditorManager.getFocusedInlineWidget();
+        if (focusedWidget instanceof MultiRangeInlineEditor) {
+            return focusedWidget;
+        } else {
+            return null;
         }
-        
-        return focusedMultiRangeInlineEditor;
     }
 
     /**

@@ -22,17 +22,17 @@
  */
 
 /*jslint vars: true, plusplus: true, devel: true, browser: true, nomen: true, indent: 4, maxerr: 50 */
-/*global require, define, $, beforeEach, afterEach, jasmine, brackets */
+/*global require, define, $, beforeEach, afterEach, jasmine, brackets, PathUtils */
 
 // Set the baseUrl to brackets/src
 require.config({
     baseUrl: "../src",
     paths: {
-        "test": "../test",
-        "perf": "../test/perf",
-        "spec": "../test/spec",
-        "text": "thirdparty/text",
-        "i18n" : "thirdparty/i18n"
+        "test"      : "../test",
+        "perf"      : "../test/perf",
+        "spec"      : "../test/spec",
+        "text"      : "thirdparty/text",
+        "i18n"      : "thirdparty/i18n"
     }
 });
 
@@ -40,27 +40,33 @@ define(function (require, exports, module) {
     'use strict';
     
     // Utility dependency
-    var SpecRunnerUtils     = require("spec/SpecRunnerUtils"),
-        PerformanceReporter = require("perf/PerformanceReporter").PerformanceReporter,
-        ExtensionLoader     = require("utils/ExtensionLoader"),
-        Async               = require("utils/Async"),
-        FileUtils           = require("file/FileUtils"),
-        Menus               = require("command/Menus"),
-        UrlParams           = require("utils/UrlParams").UrlParams;
+    var AppInit                 = require("utils/AppInit"),
+        Global                  = require("utils/Global"),
+        SpecRunnerUtils         = require("spec/SpecRunnerUtils"),
+        ExtensionLoader         = require("utils/ExtensionLoader"),
+        Async                   = require("utils/Async"),
+        FileUtils               = require("file/FileUtils"),
+        Menus                   = require("command/Menus"),
+        NativeFileSystem        = require("file/NativeFileSystem").NativeFileSystem,
+        UrlParams               = require("utils/UrlParams").UrlParams,
+        UnitTestReporter        = require("test/UnitTestReporter").UnitTestReporter,
+        BootstrapReporterView   = require("test/BootstrapReporterView").BootstrapReporterView;
 
-    // Jasmine reporter UI
-    require("test/BootstrapReporter");
-    
-    // TODO: Issue 949 - the following code should be shared
     // Load modules that self-register and just need to get included in the main project
     require("document/ChangedDocumentTracker");
+    
+    // TODO (#2155): These are used by extensions via brackets.getModule(), so tests that run those
+    // extensions need these to be required up front. We need a better solution for this eventually.
+    require("utils/ExtensionUtils");
     
     // Load both top-level suites. Filtering is applied at the top-level as a filter to BootstrapReporter.
     require("test/UnitTestSuite");
     require("test/PerformanceTestSuite");
     
     var suite,
-        params = new UrlParams();
+        params = new UrlParams(),
+        reporter,
+        reporterView;
     
     params.parse();
     
@@ -75,19 +81,25 @@ define(function (require, exports, module) {
         var bracketsPath = FileUtils.getNativeBracketsDirectoryPath(),
             paths = ["default"];
         
-        // load user extensions only when running the extension test suite
+        // load dev and user extensions only when running the extension test suite
         if (suite === "ExtensionTestSuite") {
-            paths.push("user");
+            paths.push("dev");
+            paths.push(ExtensionLoader.getUserExtensionPath());
         }
-
+        
         // This returns path to test folder, so convert to src
-        bracketsPath = bracketsPath.replace("brackets/test", "brackets/src");
+        bracketsPath = bracketsPath.replace(/\/test$/, "/src");
 
         return Async.doInParallel(paths, function (dir) {
-            return ExtensionLoader.testAllExtensionsInNativeDirectory(
-                bracketsPath + "/extensions/" + dir,
-                "extensions/" + dir
-            );
+            var extensionPath = dir;
+            
+            // If the item has "/" in it, assume it is a full path. Otherwise, load
+            // from our source path + "/extensions/".
+            if (dir.indexOf("/") === -1) {
+                extensionPath = bracketsPath + "/extensions/" + dir;
+            }
+            
+            return ExtensionLoader.testAllExtensionsInNativeDirectory(extensionPath);
         });
     }
     
@@ -106,36 +118,44 @@ define(function (require, exports, module) {
         
         $("#" + suite).closest("li").toggleClass("active", true);
         
+        AppInit._dispatchReady(AppInit.APP_READY);
+        
         jasmine.getEnv().execute();
     }
     
+    /**
+     * Listener for UnitTestReporter "runnerEnd" event. Attached only if
+     * "resultsPath" URL parameter exists. Does not overwrite existing file.
+     * Writes UnitTestReporter spec results as formatted JSON.
+     * @param {!$.Event} event
+     * @param {!UnitTestReporter} reporter
+     */
+    function _runnerEndHandler(event, reporter) {
+        var resultsPath = params.get("resultsPath"),
+            json = reporter.toJSON(),
+            deferred = new $.Deferred();
+        
+        // check if the file already exists
+        brackets.fs.stat(resultsPath, function (err, stat) {
+            if (err === brackets.fs.ERR_NOT_FOUND) {
+                // file not found, write the new file with JSON content
+                brackets.fs.writeFile(resultsPath, json, NativeFileSystem._FSEncodings.UTF8, function (err) {
+                    if (err) {
+                        deferred.reject();
+                    } else {
+                        deferred.resolve();
+                    }
+                });
+            } else {
+                // file exists, do not overwrite
+                deferred.reject();
+            }
+        });
+        
+        deferred.always(function () { window.close(); });
+    }
+    
     function init() {
-        // TODO: Issue 949 - the following code should be shared
-
-        // Define core brackets namespace if it isn't already defined
-        //
-        // We can't simply do 'brackets = {}' to define it in the global namespace because
-        // we're in "use strict" mode. Most likely, 'window' will always point to the global
-        // object when this code is running. However, in case it isn't (e.g. if we're running 
-        // inside Node for CI testing) we use this trick to get the global object.
-        //
-        // Taken from:
-        //   http://stackoverflow.com/questions/3277182/how-to-get-the-global-object-in-javascript
-        var Fn = Function, global = (new Fn('return this'))();
-        if (!global.brackets) {
-            global.brackets = {};
-        }
-
-        // Loading extensions requires creating new require.js contexts, which requires access to the global 'require' object
-        // that always gets hidden by the 'require' in the AMD wrapper. We store this in the brackets object here so that 
-        // the ExtensionLoader doesn't have to have access to the global object.
-        brackets.libRequire = global.require;
-
-        // Also store our current require.js context (the one that loads brackets core modules) so that extensions can use it
-        // Note: we change the name to "getModule" because this won't do exactly the same thing as 'require' in AMD-wrapped
-        // modules. The extension will only be able to load modules that have already been loaded once.
-        brackets.getModule = require;
-            
         suite = params.get("suite") || localStorage.getItem("SpecRunner.suite") || "UnitTestSuite";
         
         // Create a top-level filter to show/hide performance and extensions tests
@@ -192,7 +212,7 @@ define(function (require, exports, module) {
         
         _loadExtensionTests(suite).done(function () {
             var jasmineEnv = jasmine.getEnv();
-    
+            
             // Initiailize unit test preferences for each spec
             beforeEach(function () {
                 // Unique key for unit testing
@@ -206,12 +226,22 @@ define(function (require, exports, module) {
             
             jasmineEnv.updateInterval = 1000;
             
-            jasmineEnv.addReporter(new jasmine.BootstrapReporter(document, topLevelFilter));
+            // Create the reporter, which is really a model class that just gathers
+            // spec and performance data.
+            reporter = new UnitTestReporter(jasmineEnv, topLevelFilter, params.get("spec"));
             
-            // add performance reporting
-            if (isPerfSuite) {
-                jasmineEnv.addReporter(new PerformanceReporter());
+            // Optionally emit JSON for automated runs
+            if (params.get("resultsPath")) {
+                $(reporter).on("runnerEnd", _runnerEndHandler);
             }
+            
+            jasmineEnv.addReporter(reporter);
+            
+            // Create the view that displays the data from the reporter. (Usually in
+            // Jasmine this is part of the reporter, but we separate them out so that
+            // we can more easily grab just the model data for output during automatic
+            // testing.)
+            reporterView = new BootstrapReporterView(document, reporter);
             
             // remember the suite for the next unit test window launch
             localStorage.setItem("SpecRunner.suite", suite);

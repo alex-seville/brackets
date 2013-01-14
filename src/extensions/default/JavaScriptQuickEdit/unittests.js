@@ -37,37 +37,28 @@ define(function (require, exports, module) {
         FileUtils           = brackets.getModule("file/FileUtils"),
         NativeFileSystem    = brackets.getModule("file/NativeFileSystem").NativeFileSystem,
         SpecRunnerUtils     = brackets.getModule("spec/SpecRunnerUtils"),
-        PerformanceReporter = brackets.getModule("perf/PerformanceReporter");
+        UnitTestReporter    = brackets.getModule("test/UnitTestReporter");
 
     var extensionPath = FileUtils.getNativeModuleDirectoryPath(module),
-        testPath = extensionPath + "/unittest-files",
+        testPath = extensionPath + "/unittest-files/syntax",
+        tempPath = SpecRunnerUtils.getTempDirectory(),
         testWindow,
         initInlineTest;
 
     function rewriteProject(spec) {
-        var result = new $.Deferred();
-    
-        FileIndexManager.getFileInfoList("all").done(function (allFiles) {
-            // convert fileInfos to fullPaths
-            allFiles = allFiles.map(function (fileInfo) {
-                return fileInfo.fullPath;
-            });
-            
-            // parse offsets and save
-            SpecRunnerUtils.saveFilesWithoutOffsets(allFiles).done(function (offsetInfos) {
-                spec.infos = offsetInfos;
+        var result = new $.Deferred(),
+            infos = {},
+            options = {
+                parseOffsets    : true,
+                infos           : infos,
+                removePrefix    : true
+            };
         
-                // install after function to restore file content
-                spec.after(function () {
-                    runs(function () {
-                        waitsForDone(SpecRunnerUtils.saveFilesWithOffsets(spec.infos), "saveFilesWithOffsets");
-                    });
-                });
-                
-                result.resolve();
-            }).fail(function () {
-                result.reject();
-            });
+        SpecRunnerUtils.copyPath(testPath, tempPath, options).done(function () {
+            spec.infos = infos;
+            result.resolve();
+        }).fail(function () {
+            result.reject();
         });
         
         return result.promise();
@@ -92,11 +83,11 @@ define(function (require, exports, module) {
         workingSet = workingSet || [];
         expectInline = (expectInline !== undefined) ? expectInline : true;
         
-        SpecRunnerUtils.loadProjectInTestWindow(testPath);
-        
         runs(function () {
             waitsForDone(rewriteProject(spec), "rewriteProject");
         });
+        
+        SpecRunnerUtils.loadProjectInTestWindow(tempPath);
         
         runs(function () {
             workingSet.push(openFile);
@@ -281,7 +272,7 @@ define(function (require, exports, module) {
             
             this.category = "performance";
             
-            var testPath = SpecRunnerUtils.getTestPath("/../../../brackets-scenario/jquery-ui/");
+            var testPath = extensionPath + "/unittest-files/jquery-ui";
 
             beforeEach(function () {
                 SpecRunnerUtils.createTestWindowAndRun(this, function (w) {
@@ -302,6 +293,9 @@ define(function (require, exports, module) {
                 var extensionRequire,
                     JavaScriptQuickEdit,
                     i,
+                    perfMeasurements;
+                
+                runs(function () {
                     perfMeasurements = [
                         {
                             measure: PerfUtils.JAVASCRIPT_INLINE_CREATE,
@@ -335,6 +329,7 @@ define(function (require, exports, module) {
                             ]
                         }
                     ];
+                });
                 
                 runs(function () {
                     extensionRequire = testWindow.brackets.getModule("utils/ExtensionLoader").getRequireContextForExtension("JavaScriptQuickEdit");
@@ -351,8 +346,9 @@ define(function (require, exports, module) {
                 };
                 
                 function logPerf() {
-                    PerformanceReporter.logTestWindow(perfMeasurements);
-                    PerformanceReporter.clearTestWindow();
+                    var reporter = UnitTestReporter.getActiveReporter();
+                    reporter.logTestWindow(perfMeasurements);
+                    reporter.clearTestWindow();
                 }
                 
                 // repeat 5 times

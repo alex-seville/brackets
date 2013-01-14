@@ -31,37 +31,34 @@ define(function (require, exports, module) {
     var Commands                = require("command/Commands"),
         CommandManager          = require("command/CommandManager"),
         Editor                  = require("editor/Editor").Editor,
+        FileUtils               = require("file/FileUtils"),
         Strings                 = require("strings"),
         PerfUtils               = require("utils/PerfUtils"),
         NativeApp               = require("utils/NativeApp"),
-        NativeFileSystem        = require("file/NativeFileSystem").NativeFileSystem,
-        FileUtils               = require("file/FileUtils"),
-        UpdateNotification      = require("utils/UpdateNotification");
+        NativeFileSystem        = require("file/NativeFileSystem").NativeFileSystem;
     
     function handleShowDeveloperTools(commandData) {
         brackets.app.showDeveloperTools();
     }
     
-    function _handleUseTabChars() {
-        var useTabs = !Editor.getUseTabChar();
-        Editor.setUseTabChar(useTabs);
-        CommandManager.get(Commands.TOGGLE_USE_TAB_CHARS).setChecked(useTabs);
-    }
-    
-    
     // Implements the 'Run Tests' menu to bring up the Jasmine unit test window
     var _testWindow = null;
-    function _handleRunUnitTests() {
+    function _runUnitTests(spec) {
+        var queryString = spec ? "?spec=" + spec : "";
         if (_testWindow) {
             try {
-                _testWindow.location.reload(true);
+                if (_testWindow.location.search !== queryString) {
+                    _testWindow.location.href = "../test/SpecRunner.html" + queryString;
+                } else {
+                    _testWindow.location.reload(true);
+                }
             } catch (e) {
                 _testWindow = null;  // the window was probably closed
             }
         }
 
         if (!_testWindow) {
-            _testWindow = window.open("../test/SpecRunner.html", "brackets-test", "width=" + $(window).width() + ",height=" + $(window).height());
+            _testWindow = window.open("../test/SpecRunner.html" + queryString, "brackets-test", "width=" + $(window).width() + ",height=" + $(window).height());
             _testWindow.location.reload(true); // if it was opened before, we need to reload because it will be cached
         }
     }
@@ -136,8 +133,8 @@ define(function (require, exports, module) {
 
     function _handleSwitchLanguage() {
         var stringsPath = FileUtils.getNativeBracketsDirectoryPath() + "/nls";
-        NativeFileSystem.requestNativeFileSystem(stringsPath, function (dirEntry) {
-            dirEntry.createReader().readEntries(function (entries) {
+        NativeFileSystem.requestNativeFileSystem(stringsPath, function (fs) {
+            fs.root.createReader().readEntries(function (entries) {
 
                 var $activeLanguage,
                     $submit,
@@ -188,11 +185,7 @@ define(function (require, exports, module) {
                         if (!$activeLanguage) {
                             return;
                         }
-                        if (locale) {
-                            window.localStorage.setItem("locale", locale);
-                        } else {
-                            window.localStorage.removeItem("locale");
-                        }
+                        brackets.setLocale(locale);
                         
                         CommandManager.execute(Commands.DEBUG_REFRESH_WINDOW);
                     })
@@ -223,20 +216,49 @@ define(function (require, exports, module) {
                 
                 // inspect all children of dirEntry
                 entries.forEach(function (entry) {
-                    if (entry.isDirectory && entry.name.match(/^[a-z]{2}(-[A-Z]{2})?$/)) {
-                        var language = entry.name;
-                        var $li = $("<li>")
-                            .text(entry.name)
-                            .data("locale", language)
-                            .appendTo($ul);
+                    if (entry.isDirectory) {
+                        var match = entry.name.match(/^([a-z]{2})(-[a-z]{2})?$/);
+                        
+                        if (match) {
+                            var language = entry.name,
+                                label = match[1];
+                            
+                            if (match[2]) {
+                                label += match[2].toUpperCase();
+                            }
+                            
+                            var $li = $("<li>")
+                                .text(label)
+                                .data("locale", language)
+                                .appendTo($ul);
+                        }
                     }
                 });
             });
         });
     }
     
-    function _handleCheckForUpdates() {
-        UpdateNotification.checkForUpdate(true);
+    function _enableRunTestsMenuItem() {
+        if (brackets.inBrowser) {
+            return;
+        }
+
+        // Check for the SpecRunner.html file
+        var fileEntry = new NativeFileSystem.FileEntry(
+            FileUtils.getNativeBracketsDirectoryPath() + "/../test/SpecRunner.html"
+        );
+        
+        fileEntry.getMetadata(
+            function (metadata) {
+                // If we sucessfully got the metadata for the SpecRunner.html file, 
+                // enable the menu item
+                CommandManager.get(Commands.DEBUG_RUN_UNIT_TESTS).setEnabled(true);
+            },
+            function (error) {
+                // Error getting metadata. 
+                // The menu item is already disabled, so there is nothing to do here.
+            }
+        );
     }
     
     /* Register all the command handlers */
@@ -245,12 +267,16 @@ define(function (require, exports, module) {
     CommandManager.register(Strings.CMD_SHOW_DEV_TOOLS,      Commands.DEBUG_SHOW_DEVELOPER_TOOLS,   handleShowDeveloperTools)
         .setEnabled(!!brackets.app.showDeveloperTools);
     CommandManager.register(Strings.CMD_NEW_BRACKETS_WINDOW, Commands.DEBUG_NEW_BRACKETS_WINDOW,    _handleNewBracketsWindow);
-    CommandManager.register(Strings.CMD_RUN_UNIT_TESTS,      Commands.DEBUG_RUN_UNIT_TESTS,         _handleRunUnitTests);
+    
+    // Start with the "Run Tests" item disabled. It will be enabled later if the test file can be found.
+    CommandManager.register(Strings.CMD_RUN_UNIT_TESTS,      Commands.DEBUG_RUN_UNIT_TESTS,         _runUnitTests)
+        .setEnabled(false);
+    
     CommandManager.register(Strings.CMD_SHOW_PERF_DATA,      Commands.DEBUG_SHOW_PERF_DATA,         _handleShowPerfData);
     CommandManager.register(Strings.CMD_SWITCH_LANGUAGE,     Commands.DEBUG_SWITCH_LANGUAGE,        _handleSwitchLanguage);
     
-    CommandManager.register(Strings.CMD_USE_TAB_CHARS,       Commands.TOGGLE_USE_TAB_CHARS,         _handleUseTabChars)
-        .setChecked(Editor.getUseTabChar());
+    _enableRunTestsMenuItem();
     
-    CommandManager.register(Strings.CMD_CHECK_FOR_UPDATE,    Commands.CHECK_FOR_UPDATE,             _handleCheckForUpdates);
+    // exposed for convenience, but not official API
+    exports._runUnitTests = _runUnitTests;
 });

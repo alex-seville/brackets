@@ -23,7 +23,7 @@
 
 
 /*jslint vars: true, plusplus: true, devel: true, browser: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, describe, it, expect, beforeEach, afterEach, waitsFor, waitsForDone, runs, $, brackets */
+/*global define, describe, it, expect, beforeEach, afterEach, waits, waitsFor, waitsForDone, runs, $, brackets */
 
 define(function (require, exports, module) {
     'use strict';
@@ -31,17 +31,18 @@ define(function (require, exports, module) {
     var Commands,           // loaded from brackets.test
         EditorManager,      // loaded from brackets.test
         FileSyncManager,    // loaded from brackets.test
-        FileIndexManager,   // loaded from brackets.test
         DocumentManager,    // loaded from brackets.test
         FileViewController, // loaded from brackets.test
         Dialogs          = require("widgets/Dialogs"),
         NativeFileSystem = require("file/NativeFileSystem").NativeFileSystem,
+        KeyEvent         = require("utils/KeyEvent"),
         FileUtils        = require("file/FileUtils"),
         SpecRunnerUtils  = require("spec/SpecRunnerUtils");
 
     describe("InlineEditorProviders", function () {
 
         var testPath = SpecRunnerUtils.getTestPath("/spec/InlineEditorProviders-test-files"),
+            tempPath = SpecRunnerUtils.getTempDirectory(),
             testWindow,
             initInlineTest;
         
@@ -50,42 +51,26 @@ define(function (require, exports, module) {
         }
         
         function rewriteProject(spec) {
-            var result = new $.Deferred();
-        
-            FileIndexManager.getFileInfoList("all").done(function (allFiles) {
-                // convert fileInfos to fullPaths
-                allFiles = allFiles.map(function (fileInfo) {
-                    return fileInfo.fullPath;
-                });
-                
-                // parse offsets and save
-                SpecRunnerUtils.saveFilesWithoutOffsets(allFiles).done(function (offsetInfos) {
-                    spec.infos = offsetInfos;
+            var result = new $.Deferred(),
+                infos = {},
+                options = {
+                    parseOffsets    : true,
+                    infos           : infos,
+                    removePrefix    : true
+                };
             
-                    // install after function to restore file content
-                    spec.after(function () {
-                        var done = false;
-                        
-                        runs(function () {
-                            SpecRunnerUtils.saveFilesWithOffsets(spec.infos).done(function () {
-                                done = true;
-                            });
-                        });
-                        
-                        waitsFor(function () { return done; }, "saveFilesWithOffsets timeout", 1000);
-                    });
-                    
-                    result.resolve();
-                }).fail(function () {
-                    result.reject();
-                });
+            SpecRunnerUtils.copyPath(testPath, tempPath, options).done(function () {
+                spec.infos = infos;
+                result.resolve();
+            }).fail(function () {
+                result.reject();
             });
             
             return result.promise();
         }
         
         /**
-         * Performs setup for an inline editor test. Parses offsets (saved to Spec.offsets) for all files in
+         * Performs setup for an inline editor test. Parses offsets (saved to Spec.infos) for all files in
          * the test project (testPath) and saves files back to disk without offset markup.
          * When finished, open an editor for the specified project relative file path
          * then attempts opens an inline editor at the given offset. Installs an after()
@@ -108,8 +93,6 @@ define(function (require, exports, module) {
             
             expectInline = (expectInline !== undefined) ? expectInline : true;
             
-            SpecRunnerUtils.loadProjectInTestWindow(testPath);
-            
             // load project to set CSSUtils scope
             runs(function () {
                 rewriteProject(spec)
@@ -118,6 +101,8 @@ define(function (require, exports, module) {
             });
             
             waitsFor(function () { return rewriteDone && !rewriteErr; }, "rewriteProject timeout", 1000);
+            
+            SpecRunnerUtils.loadProjectInTestWindow(tempPath);
             
             runs(function () {
                 workingSet.push(openFile);
@@ -176,7 +161,6 @@ define(function (require, exports, module) {
                     Commands            = testWindow.brackets.test.Commands;
                     EditorManager       = testWindow.brackets.test.EditorManager;
                     FileSyncManager     = testWindow.brackets.test.FileSyncManager;
-                    FileIndexManager    = testWindow.brackets.test.FileIndexManager;
                     DocumentManager     = testWindow.brackets.test.DocumentManager;
                     FileViewController  = testWindow.brackets.test.FileViewController;
                 });
@@ -246,6 +230,9 @@ define(function (require, exports, module) {
             afterEach(function () {
                 //debug visual confirmation of inline editor
                 //waits(1000);
+                runs(function () {
+                    SpecRunnerUtils.deletePath(tempPath);
+                });
                 
                 // revert files to original content with offset markup
                 SpecRunnerUtils.closeTestWindow();
@@ -311,17 +298,20 @@ define(function (require, exports, module) {
                     inlineWidget = hostEditor.getInlineWidgets()[0];
                     inlinePos = inlineWidget.editors[0].getCursorPos();
                     
-                    // verify cursor position in inline editor
+                    // verify cursor position & focus in inline editor
                     expect(inlinePos).toEqual(this.infos["test1.css"].offsets[0]);
+                    expect(inlineWidget.hasFocus()).toEqual(true);
+                    expect(hostEditor.hasFocus()).toEqual(false);
                     
                     // close the editor
-                    EditorManager.closeInlineWidget(hostEditor, inlineWidget, true);
+                    EditorManager.closeInlineWidget(hostEditor, inlineWidget);
                     
                     // verify no inline widgets 
                     expect(hostEditor.getInlineWidgets().length).toBe(0);
                     
-                    // verify full editor cursor restored
+                    // verify full editor cursor & focus restored
                     expect(savedPos).toEqual(hostEditor.getCursorPos());
+                    expect(hostEditor.hasFocus()).toEqual(true);
                 });
             });
 
@@ -337,7 +327,7 @@ define(function (require, exports, module) {
                     expect(hostEditor.getInlineWidgets().length).toBe(1);
 
                     // close the editor by simulating Esc key
-                    var key = 27,   // Esc key
+                    var key = KeyEvent.DOM_VK_ESCAPE,
                         doc = testWindow.document,
                         element = doc.getElementsByClassName("inline-widget")[0];
                     SpecRunnerUtils.simulateKeyEvent(key, "keydown", element);
@@ -444,6 +434,9 @@ define(function (require, exports, module) {
                     expect(inlineEditor.document.isDirty).toBeTruthy();
                     expect(hostEditor.document.isDirty).toBeFalsy();
                     
+                    // verify focus is in inline editor
+                    expect(inlineEditor.hasFocus()).toBeTruthy();
+                    
                     // execute file save command
                     testWindow.executeCommand(Commands.FILE_SAVE).done(function () {
                         saved = true;
@@ -455,6 +448,9 @@ define(function (require, exports, module) {
                 waitsFor(function () { return saved && !err; }, "save timeout", 1000);
                 
                 runs(function () {
+                    // verify focus is still in inline editor
+                    expect(inlineEditor.hasFocus()).toBeTruthy();
+                    
                     // read saved file contents
                     FileUtils.readAsText(inlineEditor.document.file).done(function (text) {
                         savedText = text;
@@ -547,11 +543,13 @@ define(function (require, exports, module) {
                 
                 it("should close inline editor when file deleted on disk", function () {
                     // Create an expendable CSS file
-                    var fileToWrite = new NativeFileSystem.FileEntry(testPath + "/tempCSS.css");
-                    var savedTempCSSFile = false;
+                    var fileToWrite,
+                        savedTempCSSFile = false;
+
                     runs(function () {
-                        FileUtils.writeText(fileToWrite, "#anotherDiv {}")
-                            .done(function () {
+                        SpecRunnerUtils.createTextFile(tempPath + "/tempCSS.css", "#anotherDiv {}")
+                            .done(function (entry) {
+                                fileToWrite = entry;
                                 savedTempCSSFile = true;
                             });
                     });
@@ -563,19 +561,15 @@ define(function (require, exports, module) {
                     });
                     // initInlineTest() inserts a waitsFor() automatically, so must end runs() block here
                     
-                    // Delete the file
-                    var fileDeleted = false;
                     runs(function () {
                         var hostEditor = EditorManager.getCurrentFullEditor();
                         expect(hostEditor.getInlineWidgets().length).toBe(1);
-                        
-                        brackets.fs.unlink(fileToWrite.fullPath, function (err) {
-                            if (!err) {
-                                fileDeleted = true;
-                            }
-                        });
                     });
-                    waitsFor(function () { return fileDeleted; }, 1000);
+                    
+                    // Delete the file
+                    runs(function () {
+                        waitsForDone(SpecRunnerUtils.deletePath(fileToWrite.fullPath));
+                    });
                     
                     // Ping FileSyncManager to recognize the deletion
                     runs(function () {
@@ -644,6 +638,8 @@ define(function (require, exports, module) {
             
             
             describe("Bi-directional Editor Synchronizing", function () {
+                // For these tests we *deliberately* use Editor._codeMirror instead of Document to make edits,
+                // in order to test Editor->Document syncing (instead of Document->Editor).
                 
                 it("should not add an inline document to the working set without being edited", function () {
                     initInlineTest("test1.html", 0);
@@ -1064,6 +1060,52 @@ define(function (require, exports, module) {
                     fullEditor._codeMirror.redo();
                     expectTextToBeEqual(inlineEditor, fullEditor);
                     expectText(fullEditor).toBe(editedText);
+                });
+                
+            });
+            
+            describe("Multiple inline editor interaction", function () {
+                var hostEditor, inlineEditor;
+                beforeEach(function () {
+                    initInlineTest("test1.html", 1, true, ["test1.css"]);
+                    
+                    runs(function () {
+                        hostEditor = EditorManager.getCurrentFullEditor();
+                        inlineEditor = hostEditor.getInlineWidgets()[0].editors[0];
+                    });
+                });
+            
+
+                it("should keep range consistent after undo/redo (bug #1031)", function () {
+                    var secondInlineOpen = false, secondInlineEditor;
+                    
+                    // open inline editor at specified offset index
+                    runs(function () {
+                        hostEditor.focus();
+                        SpecRunnerUtils.toggleQuickEditAtOffset(
+                            hostEditor,
+                            this.infos["test1.html"].offsets[8]
+                        ).done(function (isOpen) {
+                            secondInlineOpen = isOpen;
+                        });
+                    });
+                    
+                    waitsFor(function () { return secondInlineOpen; }, "second inline open timeout", 1000);
+                    
+                    // Not sure why we have to wait in between these for the bug to occur, but we do.
+                    runs(function () {
+                        secondInlineEditor = hostEditor.getInlineWidgets()[1].editors[0];
+                        secondInlineEditor._codeMirror.replaceRange("\n\n\n\n\n", { line: 0, ch: 0 });
+                    });
+                    waits(500);
+                    runs(function () {
+                        secondInlineEditor._codeMirror.undo();
+                    });
+                    waits(500);
+                    runs(function () {
+                        inlineEditor._codeMirror.undo();
+                        expect(inlineEditor).toHaveInlineEditorRange(toRange(10, 12));
+                    });
                 });
             });
             

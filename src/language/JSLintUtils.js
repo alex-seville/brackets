@@ -23,7 +23,7 @@
 
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, maxerr: 50 */
-/*global define, $, JSLINT, PathUtils */
+/*global define, $, JSLINT, PathUtils, brackets */
 
 /**
  * Allows JSLint to run on the current document and report results in a UI panel.
@@ -37,13 +37,20 @@ define(function (require, exports, module) {
     require("thirdparty/jslint/jslint");
     
     // Load dependent modules
-    var Commands                = require("command/Commands"),
+    var Global                  = require("utils/Global"),
+        Commands                = require("command/Commands"),
         CommandManager          = require("command/CommandManager"),
         DocumentManager         = require("document/DocumentManager"),
+        EditorManager           = require("editor/EditorManager"),
         PreferencesManager      = require("preferences/PreferencesManager"),
         PerfUtils               = require("utils/PerfUtils"),
         Strings                 = require("strings"),
-        EditorManager           = require("editor/EditorManager");
+        StringUtils             = require("utils/StringUtils"),
+        AppInit                 = require("utils/AppInit"),
+        StatusBar               = require("widgets/StatusBar");
+        
+    var PREFERENCES_CLIENT_ID = module.id,
+        defaultPrefs = { enabled: !!brackets.config.enable_jslint };
     
     /**
      * @private
@@ -132,12 +139,20 @@ define(function (require, exports, module) {
 
                 $("#jslint-results .table-container")
                     .empty()
-                    .append($errorTable);
+                    .append($errorTable)
+                    .scrollTop(0);  // otherwise scroll pos from previous contents is remembered
+                
                 $lintResults.show();
                 $goldStar.hide();
+                if (JSLINT.errors.length === 1) {
+                    StatusBar.updateIndicator(module.id, true, "jslint-errors", Strings.JSLINT_ERROR_INFORMATION);
+                } else {
+                    StatusBar.updateIndicator(module.id, true, "jslint-errors", StringUtils.format(Strings.JSLINT_ERRORS_INFORMATION, JSLINT.errors.length));
+                }
             } else {
                 $lintResults.hide();
                 $goldStar.show();
+                StatusBar.updateIndicator(module.id, true, "jslint-valid", Strings.JSLINT_NO_ERRORS);
             }
 
             PerfUtils.addMeasurement(perfTimerDOM);
@@ -147,6 +162,7 @@ define(function (require, exports, module) {
             // both the results and the gold star
             $lintResults.hide();
             $goldStar.hide();
+            StatusBar.updateIndicator(module.id, true, "jslint-disabled", Strings.JSLINT_DISABLED);
         }
         
         EditorManager.resizeEditor();
@@ -199,14 +215,23 @@ define(function (require, exports, module) {
         setEnabled(!getEnabled());
     }
     
-    
     // Register command handlers
     CommandManager.register(Strings.CMD_JSLINT, Commands.TOGGLE_JSLINT, _handleToggleJSLint);
     
     // Init PreferenceStorage
-    _prefs = PreferencesManager.getPreferenceStorage(module.id, { enabled: true });
-    _setEnabled(_prefs.getValue("enabled"));
+    _prefs = PreferencesManager.getPreferenceStorage(PREFERENCES_CLIENT_ID, defaultPrefs);
     
+    // Initialize items dependent on HTML DOM
+    AppInit.htmlReady(function () {
+        var $jslintResults  = $("#jslint-results"),
+            $jslintContent  = $("#jslint-results .table-container");
+        
+        StatusBar.addIndicator(module.id, $("#gold-star"));
+        
+        // Called on HTML ready to trigger the initial UI state
+        _setEnabled(_prefs.getValue("enabled"));
+    });
+
     // Define public API
     exports.run = run;
     exports.getEnabled = getEnabled;

@@ -22,7 +22,7 @@
  */
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, regexp: true, indent: 4, maxerr: 50 */
-/*global define, $ */
+/*global define, $, brackets */
 
 /**
  *  Utilities functions related to string manipulation
@@ -118,6 +118,51 @@ define(function (require, exports, module) {
             return textOrLines.substr(0, offset).split("\n").length - 1;
         }
     }
+    
+    /**
+     * Returns true if the given string ends with the given suffix.
+     *
+     * @param {string} str
+     * @param {string} suffix
+     */
+    function endsWith(str, suffix) {
+        return str.indexOf(suffix, str.length - suffix.length) !== -1;
+    }
+
+    function urlSort(a, b) {
+        var a2, b2;
+        function isFile(s) {
+            return ((s.lastIndexOf("/") + 1) < s.length);
+        }
+
+        if (brackets.platform === "win") {
+            // Windows: prepend folder names with a '0' and file names with a '1' so folders are listed first
+            a2 = ((isFile(a)) ? "1" : "0") + a.toLowerCase();
+            b2 = ((isFile(b)) ? "1" : "0") + b.toLowerCase();
+        } else {
+            a2 = a.toLowerCase();
+            b2 = b.toLowerCase();
+        }
+
+        if (a2 === b2) {
+            return 0;
+        } else {
+            return (a2 > b2) ? 1 : -1;
+        }
+    }
+    
+    /**
+     * Return a path or URL string that can be broken near path separators.
+     * @param {string} url the path or URL to format
+     * @return {string} the formatted path or URL
+     */
+    function breakableUrl(url) {
+        // Inject zero-width space character (U+200B) near path separators (/) to allow line breaking there
+        return url.replace(
+            new RegExp(regexEscape("/"), "g"),
+            "/" + "&#8203;"
+        );
+    }
 
     // Define public API
     exports.format          = format;
@@ -126,4 +171,7 @@ define(function (require, exports, module) {
     exports.jQueryIdEscape  = jQueryIdEscape;
     exports.getLines        = getLines;
     exports.offsetToLineNum = offsetToLineNum;
+    exports.urlSort         = urlSort;
+    exports.breakableUrl    = breakableUrl;
+    exports.endsWith        = endsWith;
 });

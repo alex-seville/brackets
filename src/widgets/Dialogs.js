@@ -31,7 +31,11 @@
 define(function (require, exports, module) {
     "use strict";
     
-    var KeyBindingManager = require("command/KeyBindingManager");
+    require("utils/Global");
+
+    var KeyBindingManager = require("command/KeyBindingManager"),
+        KeyEvent          = require("utils/KeyEvent"),
+        NativeApp         = require("utils/NativeApp");
 
     var DIALOG_BTN_CANCEL = "cancel",
         DIALOG_BTN_OK = "ok",
@@ -42,15 +46,15 @@ define(function (require, exports, module) {
     // TODO: (issue #258) In future, we should templatize the HTML for the dialogs rather than having 
     // it live directly in the HTML.
     var DIALOG_ID_ERROR = "error-dialog",
+        DIALOG_ID_INFO = "error-dialog", // uses the same template for now--could be different in future
         DIALOG_ID_SAVE_CLOSE = "save-close-dialog",
         DIALOG_ID_EXT_CHANGED = "ext-changed-dialog",
         DIALOG_ID_EXT_DELETED = "ext-deleted-dialog",
-        DIALOG_ID_LIVE_DEVELOPMENT = "live-development-error-dialog",
-        DIALOG_ID_ABOUT = "about-dialog",
-        DIALOG_ID_UPDATE = "update-dialog";
+        DIALOG_ID_LIVE_DEVELOPMENT = "live-development-error-dialog";
 
     function _dismissDialog(dlg, buttonId) {
         dlg.data("buttonId", buttonId);
+        $(".clickable-link", dlg).off("click");
         dlg.modal(true).hide();
     }
     
@@ -63,12 +67,16 @@ define(function (require, exports, module) {
             buttonId = null,
             which = String.fromCharCode(e.which);
         
-        if (e.which === 13) {
+        // There might be a textfield in the dialog's UI; don't want to mistake normal typing for dialog dismissal
+        var inFormField = ($(e.target).filter(":input").length > 0),
+            inTextArea = (e.target.tagName === "TEXTAREA");
+        
+        if (e.which === KeyEvent.DOM_VK_RETURN && !inTextArea) {  // enter key in single-line text input still dismisses
             // Click primary button
             if (primaryBtn) {
                 buttonId = primaryBtn.attr("data-button-id");
             }
-        } else if (e.which === 32) {
+        } else if (e.which === KeyEvent.DOM_VK_SPACE) {
             // Space bar on focused button
             this.find(".dialog-button:focus").click();
         } else if (brackets.platform === "mac") {
@@ -78,12 +86,12 @@ define(function (require, exports, module) {
                     buttonId = DIALOG_BTN_DONTSAVE;
                 }
             // FIXME (issue #418) CMD+. Cancel swallowed by native shell
-            } else if (e.metaKey && (e.which === 190)) {
+            } else if (e.metaKey && (e.which === KeyEvent.DOM_VK_PERIOD)) {
                 buttonId = DIALOG_BTN_CANCEL;
             }
         } else { // if (brackets.platform === "win") {
             // 'N' Don't Save
-            if (which === "N") {
+            if (which === "N" && !inFormField) {
                 if (_hasButton(this, DIALOG_BTN_DONTSAVE)) {
                     buttonId = DIALOG_BTN_DONTSAVE;
                 }
@@ -92,8 +100,7 @@ define(function (require, exports, module) {
         
         if (buttonId) {
             _dismissDialog(this, buttonId);
-        } else if (!($.contains(this.get(0), e.target)) ||
-                  ($(e.target).filter(":input").length === 0)) {
+        } else if (!($.contains(this.get(0), e.target)) || !inFormField) {
             // Stop the event if the target is not inside the dialog
             // or if the target is not a form element.
             // TODO (issue #414): more robust handling of dialog scoped
@@ -104,13 +111,11 @@ define(function (require, exports, module) {
     };
     
     /**
-     * General purpose modal dialog. Assumes that:
-     * -- the root tag of the dialog is marked with a unique class name (passed as dlgClass), as well as the
-     *    classes "template modal hide".
-     * -- the HTML for the dialog contains elements with "title" and "message" classes, as well as a number 
-     *    of elements with "dialog-button" class, each of which has a "data-button-id".
+     * Like showModalDialog(), but takes a template as a parameter rather than assuming the template is embedded
+     * in the current DOM. The template can either be a string or a jQuery object representing a DOM node that is
+     * *not* in the current DOM.
      *
-     * @param {string} dlgClass The class of the dialog node in the HTML.
+     * @param {string} template A string template or jQuery object to use as the dialog HTML.
      * @param {string=} title The title of the error dialog. Can contain HTML markup. If unspecified, title in
      *      the HTML template is used unchanged.
      * @param {string=} message The message to display in the error dialog. Can contain HTML markup. If
@@ -118,24 +123,14 @@ define(function (require, exports, module) {
      * @return {$.Promise} a promise that will be resolved with the ID of the clicked button when the dialog
      *     is dismissed. Never rejected.
      */
-    function showModalDialog(dlgClass, title, message) {
+    function showModalDialogUsingTemplate(template, title, message) {
         var result = $.Deferred(),
             promise = result.promise();
         
-        // We clone the HTML rather than using it directly so that if two dialogs of the same
-        // type happen to show up, they can appear at the same time. (This is an edge case that
-        // shouldn't happen often, but we can't prevent it from happening since everything is
-        // asynchronous.)
-        var $dlg = $("." + dlgClass + ".template")
-            .clone()
-            .removeClass("template")
+        var $dlg = $(template)
             .addClass("instance")
             .appendTo(window.document.body);
         
-        if ($dlg.length === 0) {
-            throw new Error("Dialog id " + dlgClass + " does not exist");
-        }
-
         // Save the dialog promise for unit tests
         $dlg.data("promise", promise);
 
@@ -146,6 +141,13 @@ define(function (require, exports, module) {
         if (message) {
             $(".dialog-message", $dlg).html(message);
         }
+
+        $(".clickable-link", $dlg).on("click", function _handleLink(e) {
+            // Links use data-href (not href) attribute so Brackets itself doesn't redirect
+            if (e.target.dataset && e.target.dataset.href) {
+                NativeApp.openURLInDefaultBrowser(e.target.dataset.href);
+            }
+        });
 
         var handleKeyDown = _handleKeyDown.bind($dlg);
 
@@ -198,6 +200,36 @@ define(function (require, exports, module) {
     }
     
     /**
+     * General purpose modal dialog. Assumes that:
+     * -- the root tag of the dialog is marked with a unique class name (passed as dlgClass), as well as the
+     *    classes "template modal hide".
+     * -- the HTML for the dialog contains elements with "title" and "message" classes, as well as a number 
+     *    of elements with "dialog-button" class, each of which has a "data-button-id".
+     *
+     * @param {string} dlgClass The class of the dialog node in the HTML.
+     * @param {string=} title The title of the error dialog. Can contain HTML markup. If unspecified, title in
+     *      the HTML template is used unchanged.
+     * @param {string=} message The message to display in the error dialog. Can contain HTML markup. If
+     *      unspecified, body in the HTML template is used unchanged.
+     * @return {$.Promise} a promise that will be resolved with the ID of the clicked button when the dialog
+     *     is dismissed. Never rejected.
+     */
+    function showModalDialog(dlgClass, title, message) {
+        // We clone the HTML rather than using it directly so that if two dialogs of the same
+        // type happen to show up, they can appear at the same time. (This is an edge case that
+        // shouldn't happen often, but we can't prevent it from happening since everything is
+        // asynchronous.)
+        var $template = $("." + dlgClass + ".template")
+            .clone()
+            .removeClass("template");
+        if ($template.length === 0) {
+            console.error("Dialog id " + dlgClass + " does not exist");
+            return;
+        }
+        return showModalDialogUsingTemplate($template, title, message);
+    }
+    
+    /**
      * Immediately closes any dialog instances with the given class. The dialog callback for each instance will 
      * be called with the special buttonId DIALOG_CANCELED (note: callback is run asynchronously).
      */
@@ -209,20 +241,20 @@ define(function (require, exports, module) {
         });
     }
     
-    exports.DIALOG_BTN_CANCEL = DIALOG_BTN_CANCEL;
-    exports.DIALOG_BTN_OK = DIALOG_BTN_OK;
+    exports.DIALOG_BTN_CANCEL   = DIALOG_BTN_CANCEL;
+    exports.DIALOG_BTN_OK       = DIALOG_BTN_OK;
     exports.DIALOG_BTN_DONTSAVE = DIALOG_BTN_DONTSAVE;
-    exports.DIALOG_CANCELED = DIALOG_CANCELED;
+    exports.DIALOG_CANCELED     = DIALOG_CANCELED;
     exports.DIALOG_BTN_DOWNLOAD = DIALOG_BTN_DOWNLOAD;
     
-    exports.DIALOG_ID_ERROR = DIALOG_ID_ERROR;
-    exports.DIALOG_ID_SAVE_CLOSE = DIALOG_ID_SAVE_CLOSE;
-    exports.DIALOG_ID_EXT_CHANGED = DIALOG_ID_EXT_CHANGED;
-    exports.DIALOG_ID_EXT_DELETED = DIALOG_ID_EXT_DELETED;
-    exports.DIALOG_ID_LIVE_DEVELOPMENT = DIALOG_ID_LIVE_DEVELOPMENT;
-    exports.DIALOG_ID_ABOUT = DIALOG_ID_ABOUT;
-    exports.DIALOG_ID_UPDATE = DIALOG_ID_UPDATE;
+    exports.DIALOG_ID_ERROR             = DIALOG_ID_ERROR;
+    exports.DIALOG_ID_INFO              = DIALOG_ID_INFO;
+    exports.DIALOG_ID_SAVE_CLOSE        = DIALOG_ID_SAVE_CLOSE;
+    exports.DIALOG_ID_EXT_CHANGED       = DIALOG_ID_EXT_CHANGED;
+    exports.DIALOG_ID_EXT_DELETED       = DIALOG_ID_EXT_DELETED;
+    exports.DIALOG_ID_LIVE_DEVELOPMENT  = DIALOG_ID_LIVE_DEVELOPMENT;
     
-    exports.showModalDialog = showModalDialog;
-    exports.cancelModalDialogIfOpen = cancelModalDialogIfOpen;
+    exports.showModalDialog              = showModalDialog;
+    exports.showModalDialogUsingTemplate = showModalDialogUsingTemplate;
+    exports.cancelModalDialogIfOpen      = cancelModalDialogIfOpen;
 });

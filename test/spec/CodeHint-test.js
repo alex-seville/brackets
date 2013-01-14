@@ -31,6 +31,7 @@ define(function (require, exports, module) {
     var HTMLUtils       = require("language/HTMLUtils"),
         SpecRunnerUtils = require("spec/SpecRunnerUtils"),
         Editor          = require("editor/Editor").Editor,
+        KeyEvent        = require("utils/KeyEvent"),
         EditorManager,      // loaded from brackets.test
         CodeHintManager;
 
@@ -103,7 +104,7 @@ define(function (require, exports, module) {
                 // simulate Ctrl+space keystroke to invoke code hints menu
                 runs(function () {
                     var e = $.Event("keydown");
-                    e.keyCode = 32;      // spacebar key
+                    e.keyCode = KeyEvent.DOM_VK_SPACE;
                     e.ctrlKey = true;
 
                     editor = EditorManager.getCurrentFullEditor();
@@ -124,7 +125,7 @@ define(function (require, exports, module) {
                 // simulate Enter key to insert code hint into doc
                 runs(function () {
                     var e = $.Event("keydown");
-                    e.keyCode = 13;      // Enter/return key
+                    e.keyCode = KeyEvent.DOM_VK_RETURN;
 
                     editor = EditorManager.getCurrentFullEditor();
                     expect(editor).toBeTruthy();
@@ -149,7 +150,7 @@ define(function (require, exports, module) {
                 // simulate Ctrl+space keystroke to invoke code hints menu
                 runs(function () {
                     var e = $.Event("keydown");
-                    e.keyCode = 32;      // spacebar key
+                    e.keyCode = KeyEvent.DOM_VK_SPACE;
                     e.ctrlKey = true;
 
                     editor = EditorManager.getCurrentFullEditor();
@@ -167,7 +168,7 @@ define(function (require, exports, module) {
 
                 // simulate Esc key to dismiss code hints menu
                 runs(function () {
-                    var key = 27,   // Esc key
+                    var key = KeyEvent.DOM_VK_ESCAPE,
                         element = testWindow.$(".dropdown.open")[0];
                     SpecRunnerUtils.simulateKeyEvent(key, "keydown", element);
 

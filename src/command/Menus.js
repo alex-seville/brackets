@@ -29,24 +29,27 @@ define(function (require, exports, module) {
     "use strict";
     
     // Load dependent modules
-    var Commands                = require("command/Commands"),
-        KeyBindingManager       = require("command/KeyBindingManager"),
-        EditorManager           = require("editor/EditorManager"),
-        Strings                 = require("strings"),
-        StringUtils             = require("utils/StringUtils"),
-        CommandManager          = require("command/CommandManager"),
-        PopUpManager            = require("widgets/PopUpManager");
+    var AppInit             = require("utils/AppInit"),
+        Global              = require("utils/Global"),
+        Commands            = require("command/Commands"),
+        KeyBindingManager   = require("command/KeyBindingManager"),
+        EditorManager       = require("editor/EditorManager"),
+        Strings             = require("strings"),
+        StringUtils         = require("utils/StringUtils"),
+        CommandManager      = require("command/CommandManager"),
+        PopUpManager        = require("widgets/PopUpManager");
 
     /**
      * Brackets Application Menu Constants
      * @enum {string}
      */
     var AppMenuBar = {
-        FILE_MENU:     "file-menu",
-        EDIT_MENU:     "edit-menu",
-        VIEW_MENU :    "view-menu",
-        NAVIGATE_MENU: "navigate-menu",
-        DEBUG_MENU:    "debug-menu"
+        FILE_MENU       : "file-menu",
+        EDIT_MENU       : "edit-menu",
+        VIEW_MENU       : "view-menu",
+        NAVIGATE_MENU   : "navigate-menu",
+        DEBUG_MENU      : "debug-menu",     // Note: not present in some configurations of Brackets (getMenu() will return null)
+        HELP_MENU       : "help-menu"
     };
 
     /**
@@ -56,7 +59,8 @@ define(function (require, exports, module) {
     var ContextMenuIds = {
         EDITOR_MENU:        "editor-context-menu",
         INLINE_EDITOR_MENU: "inline-editor-context-menu",
-        PROJECT_MENU:       "project-context-menu"
+        PROJECT_MENU:       "project-context-menu",
+        WORKING_SET_MENU:   "working-set-context-menu"
     };
 
 
@@ -186,16 +190,6 @@ define(function (require, exports, module) {
         return binding;
     }
     
-    /** NOT IMPLEMENTED
-     * Removes MenuItem
-     * 
-     * TODO Question: for convenience should API provide a way to remove related
-     * keybindings and Command object?
-     */
-    // function removeMenuItem(id) {
-    //    NOT IMPLEMENTED
-    // }
-
     var _menuDividerIDCount = 1;
     function _getNextMenuItemDividerID() {
         return "brackets-menuDivider-" + _menuDividerIDCount++;
@@ -332,7 +326,7 @@ define(function (require, exports, module) {
         if (relativeID) {
             if (position === FIRST_IN_SECTION || position === LAST_IN_SECTION) {
                 if (!relativeID.hasOwnProperty("sectionMarker")) {
-                    console.log("Bad Parameter in _getRelativeMenuItem(): relativeID must be a MenuSection when position refers to a menu section");
+                    console.error("Bad Parameter in _getRelativeMenuItem(): relativeID must be a MenuSection when position refers to a menu section");
                     return null;
                 }
 
@@ -341,8 +335,8 @@ define(function (require, exports, module) {
                 // TODO: simplify using nextUntil()/prevUntil()
                 var $sectionMarker = this._getMenuItemForCommand(CommandManager.get(relativeID.sectionMarker));
                 if (!$sectionMarker) {
-                    console.log("_getRelativeMenuItem(): MenuSection " + relativeID.sectionMarker +
-                                " not found in Menu " + this.id);
+                    console.error("_getRelativeMenuItem(): MenuSection " + relativeID.sectionMarker +
+                                  " not found in Menu " + this.id);
                     return null;
                 }
                 var $listElem = $sectionMarker;
@@ -360,7 +354,7 @@ define(function (require, exports, module) {
                 
             } else {
                 if (relativeID.hasOwnProperty("sectionMarker")) {
-                    console.log("Bad Parameter in _getRelativeMenuItem(): if relativeID is a MenuSection, position must be FIRST_IN_SECTION or LAST_IN_SECTION");
+                    console.error("Bad Parameter in _getRelativeMenuItem(): if relativeID is a MenuSection, position must be FIRST_IN_SECTION or LAST_IN_SECTION");
                     return null;
                 }
                 
@@ -372,8 +366,8 @@ define(function (require, exports, module) {
                     $relativeElement = this._getMenuItemForCommand(command);
                 }
                 if (!$relativeElement) {
-                    console.log("_getRelativeMenuItem(): MenuItem with Command id " + relativeID +
-                                " not found in Menu " + this.id);
+                    console.error("_getRelativeMenuItem(): MenuItem with Command id " + relativeID +
+                                  " not found in Menu " + this.id);
                     return null;
                 }
             }
@@ -381,11 +375,42 @@ define(function (require, exports, module) {
             return $relativeElement;
             
         } else if (position && position !== FIRST && position !== LAST) {
-            console.log("Bad Parameter in _getRelativeMenuItem(): relative position specified with no relativeID");
+            console.error("Bad Parameter in _getRelativeMenuItem(): relative position specified with no relativeID");
             return null;
         }
         
         return $relativeElement;
+    };
+
+    /**
+     * Removes the specified menu item from this Menu. Key bindings are unaffected; use KeyBindingManager
+     * directly to remove key bindings if desired.
+     *
+     * @param {!string | Command} command - command the menu would execute if we weren't deleting it.
+     */
+    Menu.prototype.removeMenuItem = function (command) {
+        var menuItemID;
+
+        if (!command) {
+            console.error("removeMenuItem(): missing required parameters: command");
+            return;
+        }
+
+        if (typeof (command) === "string") {
+            var commandObj = CommandManager.get(command);
+            if (!commandObj) {
+                console.error("removeMenuItem(): command not found: " + command);
+                return;
+            }
+
+            menuItemID = this._getMenuItemId(command);
+        } else {
+            menuItemID = this._getMenuItemId(command.getID());
+        }
+
+        // Targeting parent to get the menu item <a> and the <li> that contains it
+        $(_getHTMLMenuItem(menuItemID)).parent().remove();
+        delete menuItemMap[menuItemID];
     };
     
     /**
@@ -405,11 +430,13 @@ define(function (require, exports, module) {
      *      Pass Menus.DIVIDER for a menu divider, or just call addMenuDivider() instead.
      * @param {?string | Array.<{key: string, platform: string}>}  keyBindings - register one
      *      one or more key bindings to associate with the supplied command.
-     * @param {?string} position - constant defining the position of new the MenuItem relative
-     *      to other MenuItems. Default is LAST.  (see Insertion position constants). 
-     * @param {?string} relativeID - id of command or menu section (future: sub-menu) that 
-     *      the new menuItem will be positioned relative to. Required for all position constants
-     *      except FIRST and LAST.
+     * @param {?string} position - constant defining the position of new MenuItem relative to
+     *      other MenuItems. Values:
+     *          - With no relativeID, use Menus.FIRST or LAST (default is LAST)
+     *          - Relative to a command id, use BEFORE or AFTER (required)
+     *          - Relative to a MenuSection, use FIRST_IN_SECTION or LAST_IN_SECTION (required)
+     * @param {?string} relativeID - command id OR one of the MenuSection.* constants. Required
+     *      for all position constants except FIRST and LAST.
      *
      * @return {MenuItem} the newly created MenuItem
      */
@@ -422,7 +449,8 @@ define(function (require, exports, module) {
             commandID;
 
         if (!command) {
-            throw new Error("addMenuItem(): missing required parameters: command");
+            console.error("addMenuItem(): missing required parameters: command");
+            return null;
         }
 
         if (typeof (command) === "string") {
@@ -433,7 +461,8 @@ define(function (require, exports, module) {
                 commandID = command;
                 command = CommandManager.get(commandID);
                 if (!command) {
-                    throw new Error("addMenuItem(): commandID not found: " + commandID);
+                    console.error("addMenuItem(): commandID not found: " + commandID);
+                    return null;
                 }
                 name = command.getName();
             }
@@ -477,13 +506,13 @@ define(function (require, exports, module) {
                 if (!Array.isArray(keyBindings)) {
                     keyBindings = [keyBindings];
                 }
-                
-                // Note that keyBindings passed during MenuItem creation take precedent over any existing key bindings
-                KeyBindingManager.addBinding(commandID, keyBindings);
-            } else {
-                // Look for existing key bindings
-                _addExistingKeyBinding(menuItem, commandID);
             }
+                
+            // Note that keyBindings passed during MenuItem creation take precedent over any existing key bindings
+            KeyBindingManager.addBinding(commandID, keyBindings);
+            
+            // Look for existing key bindings
+            _addExistingKeyBinding(menuItem, commandID);
 
             menuItem._checkedChanged();
             menuItem._enabledChanged();
@@ -657,7 +686,8 @@ define(function (require, exports, module) {
             menu;
 
         if (!name || !id) {
-            throw new Error("call to addMenu() is missing required parameters");
+            console.error("call to addMenu() is missing required parameters");
+            return null;
         }
         
         // Guard against duplicate menu ids
@@ -704,8 +734,7 @@ define(function (require, exports, module) {
      *
      */
     function ContextMenu(id) {
-        this.id = id;
-        this.menu = new Menu(id);
+        Menu.apply(this, arguments);
 
         var $newMenu = $("<li class='dropdown context-menu' id='" + StringUtils.jQueryIdEscape(id) + "'></li>"),
             $popUp = $("<ul class='dropdown-menu'></ul>"),
@@ -724,7 +753,7 @@ define(function (require, exports, module) {
             },
             false);
     }
-    ContextMenu.prototype = new Menu();
+    ContextMenu.prototype = Object.create(Menu.prototype);
     ContextMenu.prototype.constructor = ContextMenu;
     ContextMenu.prototype.parentClass = Menu.prototype;
 
@@ -742,7 +771,8 @@ define(function (require, exports, module) {
     ContextMenu.prototype.open = function (mouseOrLocation) {
 
         if (!mouseOrLocation || !mouseOrLocation.hasOwnProperty("pageX") || !mouseOrLocation.hasOwnProperty("pageY")) {
-            throw new Error("ContextMenu open(): missing required parameter");
+            console.error("ContextMenu open(): missing required parameter");
+            return;
         }
 
         var $window = $(window),
@@ -816,7 +846,8 @@ define(function (require, exports, module) {
      */
     function registerContextMenu(id) {
         if (!id) {
-            throw new Error("call to registerContextMenu() is missing required parameters");
+            console.error("call to registerContextMenu() is missing required parameters");
+            return null;
         }
         
         // Guard against duplicate menu ids
@@ -836,70 +867,64 @@ define(function (require, exports, module) {
     // function removeMenu(id) {
     //     NOT IMPLEMENTED
     // }
-
-
-    function init() {
-
+    
+    AppInit.htmlReady(function () {
         /*
          * File menu
          */
         var menu;
         menu = addMenu(Strings.FILE_MENU, AppMenuBar.FILE_MENU);
-        menu.addMenuItem(Commands.FILE_NEW,                 "Ctrl-N");
-        menu.addMenuItem(Commands.FILE_OPEN,                "Ctrl-O");
+        menu.addMenuItem(Commands.FILE_NEW);
+        menu.addMenuItem(Commands.FILE_NEW_FOLDER);
+        menu.addMenuItem(Commands.FILE_OPEN);
         menu.addMenuItem(Commands.FILE_OPEN_FOLDER);
-        menu.addMenuItem(Commands.FILE_CLOSE,               "Ctrl-W");
+        menu.addMenuItem(Commands.FILE_CLOSE);
+        menu.addMenuItem(Commands.FILE_CLOSE_ALL);
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.FILE_SAVE,                "Ctrl-S");
-        menu.addMenuItem(Commands.FILE_SAVE_ALL,            "Ctrl-Alt-S");
+        menu.addMenuItem(Commands.FILE_SAVE);
+        menu.addMenuItem(Commands.FILE_SAVE_ALL);
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.FILE_LIVE_FILE_PREVIEW,   "Ctrl-Alt-P");
+        menu.addMenuItem(Commands.FILE_LIVE_FILE_PREVIEW);
+        menu.addMenuItem(Commands.FILE_LIVE_HIGHLIGHT);
+        menu.addMenuItem(Commands.FILE_PROJECT_SETTINGS);
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.FILE_QUIT,                "Ctrl-Q");
+        menu.addMenuItem(Commands.FILE_QUIT);
 
         /*
          * Edit  menu
          */
         menu = addMenu(Strings.EDIT_MENU, AppMenuBar.EDIT_MENU);
-        menu.addMenuItem(Commands.EDIT_SELECT_ALL,          "Ctrl-A");
+        menu.addMenuItem(Commands.EDIT_SELECT_ALL);
+        menu.addMenuItem(Commands.EDIT_SELECT_LINE);
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.EDIT_FIND,                "Ctrl-F");
-        menu.addMenuItem(Commands.EDIT_FIND_IN_FILES,       "Ctrl-Shift-F");
-        menu.addMenuItem(Commands.EDIT_FIND_NEXT,           [{key: "F3",     platform: "win"},
-                                                             {key: "Cmd-G", platform: "mac"}]);
+        menu.addMenuItem(Commands.EDIT_FIND);
+        menu.addMenuItem(Commands.EDIT_FIND_IN_FILES);
+        menu.addMenuItem(Commands.EDIT_FIND_NEXT);
 
-        menu.addMenuItem(Commands.EDIT_FIND_PREVIOUS,       [{key: "Shift-F3",      platform: "win"},
-                                                             {key:  "Cmd-Shift-G", platform: "mac"}]);
+        menu.addMenuItem(Commands.EDIT_FIND_PREVIOUS);
 
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.EDIT_REPLACE,             [{key: "Ctrl-H",     platform: "win"},
-                                                             {key: "Cmd-Alt-F", platform: "mac"}]);
+        menu.addMenuItem(Commands.EDIT_REPLACE);
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.EDIT_INDENT,          [{key: "Indent", displayKey: "Tab"}]);
-        menu.addMenuItem(Commands.EDIT_UNINDENT,        [{key: "Unindent", displayKey: "Shift-Tab"}]);
-        menu.addMenuItem(Commands.EDIT_DUPLICATE,       "Ctrl-D");
-        menu.addMenuItem(Commands.EDIT_LINE_UP,         [{key: "Ctrl-Shift-Up", displayKey: "Ctrl-Shift-\u2191",
-                                                          platform: "win"},
-                                                         {key:  "Cmd-Ctrl-Up", displayKey: "Cmd-Ctrl-\u2191",
-                                                          platform: "mac"}]);
-        menu.addMenuItem(Commands.EDIT_LINE_DOWN,       [{key: "Ctrl-Shift-Down", displayKey: "Ctrl-Shift-\u2193",
-                                                          platform: "win"},
-                                                         {key:  "Cmd-Ctrl-Down", displayKey: "Cmd-Ctrl-\u2193",
-                                                          platform: "mac"}]);
+        menu.addMenuItem(Commands.EDIT_INDENT);
+        menu.addMenuItem(Commands.EDIT_UNINDENT);
+        menu.addMenuItem(Commands.EDIT_DUPLICATE);
+        menu.addMenuItem(Commands.EDIT_DELETE_LINES);
+        menu.addMenuItem(Commands.EDIT_LINE_UP);
+        menu.addMenuItem(Commands.EDIT_LINE_DOWN);
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.EDIT_LINE_COMMENT,    "Ctrl-/");
-        menu.addMenuDivider();
-        menu.addMenuItem(Commands.TOGGLE_USE_TAB_CHARS);
+        menu.addMenuItem(Commands.EDIT_LINE_COMMENT);
+        menu.addMenuItem(Commands.EDIT_BLOCK_COMMENT);
 
         /*
          * View menu
          */
         menu = addMenu(Strings.VIEW_MENU, AppMenuBar.VIEW_MENU);
-        menu.addMenuItem(Commands.VIEW_HIDE_SIDEBAR,        "Ctrl-Shift-H");
+        menu.addMenuItem(Commands.VIEW_HIDE_SIDEBAR);
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.VIEW_INCREASE_FONT_SIZE, [{key: "Ctrl-=", displayKey: "Ctrl-+"}]);
-        menu.addMenuItem(Commands.VIEW_DECREASE_FONT_SIZE, [{key: "Ctrl--", displayKey: "Ctrl-\u2212"}]);
-        menu.addMenuItem(Commands.VIEW_RESTORE_FONT_SIZE, "Ctrl-0");
+        menu.addMenuItem(Commands.VIEW_INCREASE_FONT_SIZE);
+        menu.addMenuItem(Commands.VIEW_DECREASE_FONT_SIZE);
+        menu.addMenuItem(Commands.VIEW_RESTORE_FONT_SIZE);
         menu.addMenuDivider();
         menu.addMenuItem(Commands.TOGGLE_JSLINT);
 
@@ -907,32 +932,64 @@ define(function (require, exports, module) {
          * Navigate menu
          */
         menu = addMenu(Strings.NAVIGATE_MENU, AppMenuBar.NAVIGATE_MENU);
-        menu.addMenuItem(Commands.NAVIGATE_QUICK_OPEN,      "Ctrl-Shift-O");
-        menu.addMenuItem(Commands.NAVIGATE_GOTO_LINE,       [{key: "Ctrl-G", platform: "win"},
-                                                             {key: "Cmd-L", platform: "mac"}]);
+        menu.addMenuItem(Commands.NAVIGATE_QUICK_OPEN);
+        menu.addMenuItem(Commands.NAVIGATE_GOTO_LINE);
 
-        menu.addMenuItem(Commands.NAVIGATE_GOTO_DEFINITION, "Ctrl-T");
+        menu.addMenuItem(Commands.NAVIGATE_GOTO_DEFINITION);
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.TOGGLE_QUICK_EDIT,        "Ctrl-E");
-        menu.addMenuItem(Commands.QUICK_EDIT_PREV_MATCH,    {key: "Alt-Up", displayKey: "Alt-\u2191"});
-        menu.addMenuItem(Commands.QUICK_EDIT_NEXT_MATCH,    {key: "Alt-Down", displayKey: "Alt-\u2193"});
+        menu.addMenuItem(Commands.NAVIGATE_NEXT_DOC);
+        menu.addMenuItem(Commands.NAVIGATE_PREV_DOC);
+        menu.addMenuDivider();
+        menu.addMenuItem(Commands.NAVIGATE_SHOW_IN_FILE_TREE);
+        menu.addMenuDivider();
+        menu.addMenuItem(Commands.TOGGLE_QUICK_EDIT);
+        menu.addMenuItem(Commands.QUICK_EDIT_PREV_MATCH);
+        menu.addMenuItem(Commands.QUICK_EDIT_NEXT_MATCH);
 
         /*
          * Debug menu
          */
-        menu = addMenu(Strings.DEBUG_MENU, AppMenuBar.DEBUG_MENU);
-        menu.addMenuItem(Commands.DEBUG_SHOW_DEVELOPER_TOOLS, [{key: "F12",        platform: "win"},
-                                                               {key: "Cmd-Opt-I", platform: "mac"}]);
-        menu.addMenuItem(Commands.DEBUG_REFRESH_WINDOW, [{key: "F5",     platform: "win"},
-                                                         {key: "Cmd-R", platform:  "mac"}]);
-        menu.addMenuItem(Commands.DEBUG_NEW_BRACKETS_WINDOW);
+        if (brackets.config.show_debug_menu) {
+            menu = addMenu(Strings.DEBUG_MENU, AppMenuBar.DEBUG_MENU);
+            menu.addMenuItem(Commands.DEBUG_SHOW_DEVELOPER_TOOLS);
+            menu.addMenuItem(Commands.DEBUG_REFRESH_WINDOW);
+            menu.addMenuItem(Commands.DEBUG_NEW_BRACKETS_WINDOW);
+            menu.addMenuDivider();
+            menu.addMenuItem(Commands.DEBUG_SWITCH_LANGUAGE);
+            menu.addMenuDivider();
+            menu.addMenuItem(Commands.DEBUG_RUN_UNIT_TESTS);
+            menu.addMenuItem(Commands.DEBUG_SHOW_PERF_DATA);
+        }
+
+        /*
+         * Help menu
+         */
+        menu = addMenu(Strings.HELP_MENU, AppMenuBar.HELP_MENU);
+        menu.addMenuItem(Commands.HELP_CHECK_FOR_UPDATE);
+
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.DEBUG_SWITCH_LANGUAGE);
+        if (brackets.config.how_to_use_url) {
+            menu.addMenuItem(Commands.HELP_HOW_TO_USE_BRACKETS);
+        }
+        if (brackets.config.forum_url) {
+            menu.addMenuItem(Commands.HELP_FORUM);
+        }
+        if (brackets.config.release_notes_url) {
+            menu.addMenuItem(Commands.HELP_RELEASE_NOTES);
+        }
+        if (brackets.config.report_issue_url) {
+            menu.addMenuItem(Commands.HELP_REPORT_AN_ISSUE);
+        }
+
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.DEBUG_RUN_UNIT_TESTS);
-        menu.addMenuItem(Commands.DEBUG_SHOW_PERF_DATA);
+        menu.addMenuItem(Commands.HELP_SHOW_EXT_FOLDER);
+
+
         menu.addMenuDivider();
-        menu.addMenuItem(Commands.CHECK_FOR_UPDATE);
+        if (brackets.config.twitter_url) {
+            menu.addMenuItem(Commands.HELP_TWITTER);
+        }
+        menu.addMenuItem(Commands.HELP_ABOUT);
 
 
         /*
@@ -940,6 +997,24 @@ define(function (require, exports, module) {
          */
         var project_cmenu = registerContextMenu(ContextMenuIds.PROJECT_MENU);
         project_cmenu.addMenuItem(Commands.FILE_NEW);
+        project_cmenu.addMenuItem(Commands.FILE_NEW_FOLDER);
+        project_cmenu.addMenuItem(Commands.FILE_RENAME);
+        project_cmenu.addMenuDivider();
+        project_cmenu.addMenuItem(Commands.EDIT_FIND_IN_SUBTREE);
+
+        var working_set_cmenu = registerContextMenu(ContextMenuIds.WORKING_SET_MENU);
+        working_set_cmenu.addMenuItem(Commands.FILE_CLOSE);
+        working_set_cmenu.addMenuItem(Commands.FILE_SAVE);
+        working_set_cmenu.addMenuItem(Commands.FILE_RENAME);
+        working_set_cmenu.addMenuItem(Commands.NAVIGATE_SHOW_IN_FILE_TREE);
+        working_set_cmenu.addMenuDivider();
+        working_set_cmenu.addMenuItem(Commands.EDIT_FIND_IN_SUBTREE);
+        working_set_cmenu.addMenuDivider();
+        working_set_cmenu.addMenuItem(Commands.SORT_WORKINGSET_BY_ADDED);
+        working_set_cmenu.addMenuItem(Commands.SORT_WORKINGSET_BY_NAME);
+        working_set_cmenu.addMenuItem(Commands.SORT_WORKINGSET_BY_TYPE);
+        working_set_cmenu.addMenuDivider();
+        working_set_cmenu.addMenuItem(Commands.SORT_WORKINGSET_AUTO);
 
         var editor_cmenu = registerContextMenu(ContextMenuIds.EDITOR_MENU);
         editor_cmenu.addMenuItem(Commands.TOGGLE_QUICK_EDIT);
@@ -982,6 +1057,8 @@ define(function (require, exports, module) {
                     //e.pageY += 6;
                 }
                 
+                // Inline text editors have a different context menu (safe to assume it's not some other
+                // type of inline widget since we already know an Editor has focus)
                 if (inlineWidget) {
                     inline_editor_cmenu.open(e);
                 } else {
@@ -991,12 +1068,14 @@ define(function (require, exports, module) {
         });
 
         /**
-         * Context menu for folder tree & working set list
-         *
-         * TODO (#1069): change selection on right mousedown if not on something already selected
+         * Context menus for folder tree & working set list
          */
-        $("#projects").on("contextmenu", function (e) {
+        $("#project-files-container").on("contextmenu", function (e) {
             project_cmenu.open(e);
+        });
+
+        $("#open-files-container").on("contextmenu", function (e) {
+            working_set_cmenu.open(e);
         });
 
         // Prevent the browser context menu since Brackets creates a custom context menu
@@ -1022,10 +1101,9 @@ define(function (require, exports, module) {
                 $(this).addClass("open");
             }
         });
-    }
+    });
 
     // Define public API
-    exports.init = init;
     exports.AppMenuBar = AppMenuBar;
     exports.ContextMenuIds = ContextMenuIds;
     exports.MenuSection = MenuSection;

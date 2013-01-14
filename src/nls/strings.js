@@ -26,7 +26,7 @@
 
 define(function (require, exports, module) {
     
-    'use strict';
+    "use strict";
     
     // Code that needs to display user strings should call require("strings") to load
     // src/strings.js. This file will dynamically load strings.js for the specified brackets.locale.
@@ -38,6 +38,14 @@ define(function (require, exports, module) {
     module.exports = {
         root: true,
         "de": true,
-        "fr": true
+        "fr": true,
+        "nb": true,
+        "es": true,
+        "it": true,
+        "pt-br": true,
+        "ja": true,
+        "tr": true,
+        "ru": true,
+        "sv": true
     };
 });

@@ -23,7 +23,7 @@
 
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, regexp: true, indent: 4, maxerr: 50 */
-/*global define, PathUtils, FileError, brackets */
+/*global define, PathUtils, brackets */
 
 /**
  * Set of utilites for working with the code editor
@@ -42,10 +42,13 @@ define(function (require, exports, module) {
     require("thirdparty/CodeMirror2/mode/coffeescript/coffeescript");
     require("thirdparty/CodeMirror2/mode/clojure/clojure");
     require("thirdparty/CodeMirror2/mode/perl/perl");
+    require("thirdparty/CodeMirror2/mode/python/python");
     require("thirdparty/CodeMirror2/mode/ruby/ruby");
+    require("thirdparty/CodeMirror2/mode/lua/lua");
     require("thirdparty/CodeMirror2/mode/mysql/mysql");
     require("thirdparty/CodeMirror2/mode/diff/diff");
     require("thirdparty/CodeMirror2/mode/markdown/markdown");
+    require("thirdparty/CodeMirror2/mode/yaml/yaml");
 
     /**
      * @private
@@ -62,6 +65,9 @@ define(function (require, exports, module) {
         if (ext.charAt(0) === ".") {
             ext = ext.substr(1);
         }
+        
+        // Make checks below case-INsensitive
+        ext = ext.toLowerCase();
 
         switch (ext) {
 
@@ -79,12 +85,20 @@ define(function (require, exports, module) {
 
         case "html":
         case "htm":
+        case "shtm":
+        case "shtml":
         case "xhtml":
         case "cfm":
+        case "cfml":
         case "cfc":
+        case "dhtml":
+        case "xht":
             return "htmlmixed";
 
+        case "svg":
         case "xml":
+        case "wxs":  // Wix XML extensions - used in Brackets installer
+        case "wxl":
             return "xml";
 
         case "php":
@@ -93,6 +107,7 @@ define(function (require, exports, module) {
         case "php5":
         case "phtm":
         case "phtml":
+        case "ctp":
             return "php";
 
         case "cc":
@@ -130,6 +145,13 @@ define(function (require, exports, module) {
         case "rb":
             return "ruby";
 
+        case "py":
+        case "pyw":
+            return "python";
+        
+        case "lua":
+            return "lua";
+
         case "sql":
             return "mysql";
 
@@ -138,7 +160,12 @@ define(function (require, exports, module) {
             return "diff";
 
         case "md":
+        case "markdown":
             return "markdown";
+        
+        case "yaml":
+        case "yml":
+            return "yaml";
 
         default:
             console.log("Called EditorUtils.js _getModeFromFileExtensions with an unhandled file extension: " + ext);

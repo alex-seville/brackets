@@ -22,7 +22,7 @@
  */
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, regexp: true, indent: 4, maxerr: 50 */
-/*global define, $, brackets, PathUtils */
+/*global define, $, brackets, PathUtils, window, Mustache */
 
 /**
  *  Utilities functions for displaying update notifications
@@ -31,15 +31,16 @@
 define(function (require, exports, module) {
     "use strict";
     
-    var Dialogs             = require("widgets/Dialogs"),
-        NativeApp           = require("utils/NativeApp"),
-        PreferencesManager  = require("preferences/PreferencesManager"),
-        Strings             = require("strings"),
-        StringUtils         = require("utils/StringUtils"),
-        BuildNumberJSON     = require("text!buildNumber.json");
+    var Dialogs              = require("widgets/Dialogs"),
+        NativeApp            = require("utils/NativeApp"),
+        PreferencesManager   = require("preferences/PreferencesManager"),
+        Strings              = require("strings"),
+        StringUtils          = require("utils/StringUtils"),
+        Global               = require("utils/Global"),
+        UpdateDialogTemplate = require("text!htmlContent/update-dialog.html");
     
-    // Current build number.
-    var _buildNumber = JSON.parse(BuildNumberJSON).buildNumber;
+    // Extract current build number from package.json version field 0.0.0-0
+    var _buildNumber = Number(/-([0-9]+)/.exec(brackets.metadata.version)[1]);
     
     // PreferenceStorage
     var _prefs = PreferencesManager.getPreferenceStorage(module.id, {lastNotifiedBuildNumber: 0});
@@ -55,8 +56,8 @@ define(function (require, exports, module) {
     // URL to load version info from. By default this is loaded no more than once a day. If 
     // you force an update check it is always loaded.
     
-    // TODO: This should point to a file on brackets.io. For now, dummy info is stored in a gist.
-    var _versionInfoURL = "https://raw.github.com/gist/78bfd92c090c9dbab802/6a98fc40968623be63ba74fdb1fea4c7cb9a35b2/gistfile1.json";
+    // URL to fetch the version information.
+    var _versionInfoURL;
     
     // Information on all posted builds of Brackets. This is an Array, where each element is 
     // an Object with the following fields:
@@ -111,9 +112,9 @@ define(function (require, exports, module) {
         }
         
         if (fetchData) {
-            // TODO: add language and buildNumber parameters to URL
             $.ajax(_versionInfoURL, {
                 dataType: "text",
+                cache: false,
                 complete: function (jqXHR, status) {
                     if (status === "success") {
                         try {
@@ -186,7 +187,7 @@ define(function (require, exports, module) {
      * Show a dialog that shows the update 
      */
     function _showUpdateNotificationDialog(updates) {
-        Dialogs.showModalDialog(Dialogs.DIALOG_ID_UPDATE)
+        Dialogs.showModalDialogUsingTemplate(Mustache.render(UpdateDialogTemplate, Strings))
             .done(function (id) {
                 if (id === Dialogs.DIALOG_BTN_DOWNLOAD) {
                     // The first entry in the updates array has the latest download link
@@ -283,11 +284,20 @@ define(function (require, exports, module) {
                 // Get all available updates
                 var allUpdates = _stripOldVersionInfo(versionInfo, _buildNumber);
                 
+                // When running directly from GitHub source (as opposed to 
+                // an installed build), _buildNumber is 0. In this case, if the
+                // test is not forced, don't show the update notification icon or
+                // dialog.
+                if (_buildNumber === 0 && !force) {
+                    result.resolve();
+                    return;
+                }
+                
                 if (allUpdates) {
                     // Always show the "update available" icon if any updates are available
                     var $updateNotification = $("#update-notification");
                     
-                    $updateNotification.show();
+                    $updateNotification.css("display", "inline-block");
                     if (!_addedClickHandler) {
                         _addedClickHandler = true;
                         $updateNotification.on("click", function () {
@@ -330,11 +340,22 @@ define(function (require, exports, module) {
                 result.resolve();
             })
             .fail(function () {
+                // Error fetching the update data. If this is a forced check, alert the user
+                if (force) {
+                    Dialogs.showModalDialog(
+                        Dialogs.DIALOG_ID_ERROR,
+                        Strings.ERROR_FETCHING_UPDATE_INFO_TITLE,
+                        Strings.ERROR_FETCHING_UPDATE_INFO_MSG
+                    );
+                }
                 result.reject();
             });
         
         return result.promise();
     }
+    
+    // Append locale to version info URL
+    _versionInfoURL = brackets.config.update_info_url + brackets.getLocale() + ".json";
     
     // Define public API
     exports.checkForUpdate = checkForUpdate;

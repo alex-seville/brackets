@@ -34,7 +34,8 @@ define(function (require, exports, module) {
         EditorManager       = require("editor/EditorManager"),
         CommandManager      = require("command/CommandManager"),
         Commands            = require("command/Commands"),
-        InlineWidget        = require("editor/InlineWidget").InlineWidget;
+        InlineWidget        = require("editor/InlineWidget").InlineWidget,
+        CollectionUtils     = require("utils/CollectionUtils");
 
     /**
      * Returns editor holder width (not CodeMirror's width).
@@ -81,7 +82,7 @@ define(function (require, exports, module) {
         /* @type {Array.<{Editor}>}*/
         this.editors = [];
     }
-    InlineTextEditor.prototype = new InlineWidget();
+    InlineTextEditor.prototype = Object.create(InlineWidget.prototype);
     InlineTextEditor.prototype.constructor = InlineTextEditor;
     InlineTextEditor.prototype.parentClass = InlineWidget.prototype;
     
@@ -125,6 +126,8 @@ define(function (require, exports, module) {
      * Called any time inline was closed, whether manually (via close()) or automatically
      */
     InlineTextEditor.prototype.onClosed = function () {
+        InlineTextEditor.prototype.parentClass.onClosed.apply(this, arguments);
+            
         _syncGutterWidths(this.hostEditor);
         
         this.editors.forEach(function (editor) {
@@ -170,6 +173,8 @@ define(function (require, exports, module) {
      *  editor is constructed and added to the DOM
      */
     InlineTextEditor.prototype.onAdded = function () {
+        InlineTextEditor.prototype.parentClass.onAdded.apply(this, arguments);
+        
         this.editors.forEach(function (editor) {
             editor.refresh();
         });
@@ -183,6 +188,17 @@ define(function (require, exports, module) {
         
         this.editors[0].focus();
     };
+    
+    /**
+     * @return {?Editor} If an Editor within this inline editor has focus, returns it. Otherwise returns null.
+     */
+    InlineTextEditor.prototype.getFocusedEditor = function () {
+        var focusedI = CollectionUtils.indexOf(this.editors, function (editor) {
+            return editor.hasFocus();
+        });
+        return this.editors[focusedI];  // returns undefined if -1, which works
+    };
+
 
     /**
      *
@@ -238,20 +254,18 @@ define(function (require, exports, module) {
         this.editors.push(inlineInfo.editor);
         container.appendChild(wrapperDiv);
 
-        // Size editor to content whenever it changes (via edits here or any other view of the doc)
+        // Size editor to content whenever text changes (via edits here or any other view of the doc: Editor
+        // fires "change" any time its text changes, regardless of origin)
         $(inlineInfo.editor).on("change", function () {
             self.sizeInlineWidgetToContents();
             
-            // And update line number since a change to the Editor equals a change to the Document,
-            // which may mean a change to the line range too
+            // Changes above the inline range could change our line number, so update label
             $lineNumber.text(inlineInfo.editor.getFirstVisibleLine() + 1);
         });
         
-        // If Document's file is deleted, or Editor loses sync with Document, just close
+        // If Document's file is deleted, or Editor loses sync with Document, delegate to this._onLostContent()
         $(inlineInfo.editor).on("lostContent", function () {
-            // Note: this closes the entire inline widget if any one Editor loses sync. This seems
-            // better than leaving it open but suddenly removing one rule from the result list.
-            self.close();
+            self._onLostContent.apply(self, arguments);
         });
         
         // set dirty indicator state
@@ -262,7 +276,7 @@ define(function (require, exports, module) {
      * @param {Editor} hostEditor
      */
     InlineTextEditor.prototype.load = function (hostEditor) {
-        this.hostEditor = hostEditor;
+        InlineTextEditor.prototype.parentClass.load.apply(this, arguments);
 
         // TODO: incomplete impelementation. It's not clear yet if InlineTextEditor
         // will fuction as an abstract class or as generic inline editor implementation
@@ -273,18 +287,21 @@ define(function (require, exports, module) {
      * Called when the editor containing the inline is made visible.
      */
     InlineTextEditor.prototype.onParentShown = function () {
+        InlineTextEditor.prototype.parentClass.onParentShown.apply(this, arguments);
         // We need to call this explicitly whenever the host editor is reshown, since
         // we don't actually resize the inline editor while its host is invisible (see
         // isFullyVisible() check in sizeInlineWidgetToContents()).
         this.sizeInlineWidgetToContents(true);
     };
-    
-    InlineTextEditor.prototype._editorHasFocus = function () {
-        return this.editors.some(function (editor) {
-            return editor.hasFocus();
-        });
-    };
         
+    /**
+     * If Document's file is deleted, or Editor loses sync with Document, just close
+     */
+    InlineTextEditor.prototype._onLostContent = function () {
+        // Note: this closes the entire inline widget if any one Editor loses sync. This seems
+        // better than leaving it open but suddenly removing one rule from the result list.
+        this.close();
+    };
     
     // consolidate all dirty document updates
     $(DocumentManager).on("dirtyFlagChange", _dirtyFlagChangeHandler);

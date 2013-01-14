@@ -32,14 +32,7 @@
  */
 
 .project-panel-background {
-    background: rgb(73,77,77); /* Old browsers */
-    background: -moz-linear-gradient(top,  rgb(73,77,77) 0%, rgb(59,63,65) 51%); /* FF3.6+ */
-    background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,rgb(73,77,77)), color-stop(51%,rgb(59,63,65))); /* Chrome,Safari4+ */
-    background: -webkit-linear-gradient(top,  rgb(73,77,77) 0%,rgb(59,63,65) 51%); /* Chrome10+,Safari5.1+ */
-    background: -o-linear-gradient(top,  rgb(73,77,77) 0%,rgb(59,63,65) 51%); /* Opera 11.10+ */
-    background: -ms-linear-gradient(top,  rgb(73,77,77) 0%,rgb(59,63,65) 51%); /* IE10+ */
-    background: linear-gradient(top,  rgb(73,77,77) 0%,rgb(59,63,65) 51%); /* W3C */
-    filter: ~"progid:DXImageTransform.Microsoft.gradient( startColorstr='#494d4d', endColorstr='#3b3f41',GradientType=0 )";  /* IE6-9 */
+    background: #3C3F41 url("images/propertiespanel_back.png") repeat-x 0 0;
 }
 
 .panel {
@@ -155,6 +148,10 @@
             font-style: italic;
             padding-right: 22px;
         }
+
+        span, a {
+            cursor: default;
+        }
     }
 }
 
@@ -175,6 +172,7 @@
     a {
         color: @bc-black;
         text-shadow: none;
+        cursor: default;
     }
 
     // Menubar item appearance
@@ -314,6 +312,25 @@
 
 /* Dialog-related styles */
 
+.modal {
+    width: auto;
+}
+
+.modal .close {
+    cursor: default;
+}
+
+.modal-body, .modal-header {
+    /* See styles/bootstrap/patterns.less .modal class.
+       Pushing this value down to .modal-header and .modal-body
+       to allow the overall modal to take the width of the footer */
+    width: 560px;
+}
+
+.modal-footer {
+    white-space: nowrap;
+}
+
 .modal-footer .btn.left {
     float: left;
 }
@@ -348,7 +365,13 @@
     font-weight: @font-weight-semibold;
 }
 
+/* Any Dialog text in this style is automatically turned into a link that opens in the browser. Use data-href for the link's target. */
+.clickable-link {
+    cursor: pointer;
+}
+
 .btn {
+    cursor: default;
     font-size: 16px;
     font-weight: @font-weight-semibold;
     color: #454545;
@@ -367,9 +390,39 @@
 
 /* Update dialog */
 .update-dialog .modal-body {
-    .update-info {
-        max-height: 200px;
-        overflow: auto;
+    position: relative;
+    .update-icon {
+        position: absolute;
+        left: 30px; // relative to border of modal-body
+        top: 20px;
+        width: 80px;
+        height: 80px;
+    }
+    .update-text {
+        // Icon is 120px, so we need at least that much left padding/margin to avoid overlap
+        margin: 0 10px 0 123px;
+
+        .update-info {
+            max-height: 200px;
+            overflow: auto;
+        }
+    }
+}
+
+/* Project Settings dialog */
+.project-settings-dialog .modal-body {
+    text-align: center;
+
+    .settings-list {
+        display: inline-block;
+    }
+    label {
+        float: none;
+    }
+    input.base-url {
+        display: inline;
+        margin: 10px;
+        width: 300px;
     }
 }
 
@@ -394,7 +447,7 @@
     h2 {
         font-weight: normal;
         font-size: 25px;
-        margin-bottom: -8px;
+        margin-bottom: -4px;
         margin-top: 3px;
     }
     .dialog-message {

@@ -23,7 +23,7 @@
 
 
 /*jslint vars: true, plusplus: true, devel: true, nomen: true, indent: 4, forin: true, maxerr: 50, regexp: true */
-/*global define, $, less, window, XMLHttpRequest */
+/*global brackets, define, $, less, window, XMLHttpRequest */
 
 /**
  * main integrates LiveDevelopment into Brackets
@@ -38,17 +38,25 @@
 define(function main(require, exports, module) {
     "use strict";
 
-    var DocumentManager = require("document/DocumentManager"),
-        Commands        = require("command/Commands"),
-        LiveDevelopment = require("LiveDevelopment/LiveDevelopment"),
-        Inspector       = require("LiveDevelopment/Inspector/Inspector"),
-        CommandManager  = require("command/CommandManager"),
-        Strings = require("strings");
+    var DocumentManager     = require("document/DocumentManager"),
+        Commands            = require("command/Commands"),
+        AppInit             = require("utils/AppInit"),
+        LiveDevelopment     = require("LiveDevelopment/LiveDevelopment"),
+        Inspector           = require("LiveDevelopment/Inspector/Inspector"),
+        CommandManager      = require("command/CommandManager"),
+        PreferencesManager  = require("preferences/PreferencesManager"),
+        Dialogs             = require("widgets/Dialogs"),
+        UrlParams           = require("utils/UrlParams").UrlParams,
+        Strings             = require("strings");
 
+    var PREFERENCES_KEY = "com.adobe.brackets.live-development";
+    var prefs;
+    var params = new UrlParams();
     var config = {
+        experimental: false, // enable experimental features
         debug: true, // enable debug output and helpers
         autoconnect: false, // go live automatically after startup?
-        highlight: false, // enable highlighting?
+        highlight: true, // enable highlighting?
         highlightConfig: { // the highlight configuration for the Inspector
             borderColor:  {r: 255, g: 229, b: 153, a: 0.66},
             contentColor: {r: 111, g: 168, b: 220, a: 0.55},
@@ -59,9 +67,10 @@ define(function main(require, exports, module) {
     };
     var _checkMark = "✓"; // Check mark character
     // Status labels/styles are ordered: error, not connected, progress1, progress2, connected.
-    var _statusTooltip = [Strings.LIVE_DEV_STATUS_TIP_NOT_CONNECTED, Strings.LIVE_DEV_STATUS_TIP_NOT_CONNECTED, Strings.LIVE_DEV_STATUS_TIP_PROGRESS1,
-                          Strings.LIVE_DEV_STATUS_TIP_PROGRESS2, Strings.LIVE_DEV_STATUS_TIP_CONNECTED];  // Status indicator tooltip
-    var _statusStyle = ["warning", "", "info", "info", "success"];  // Status indicator's CSS class
+    var _statusTooltip = [Strings.LIVE_DEV_STATUS_TIP_NOT_CONNECTED, Strings.LIVE_DEV_STATUS_TIP_NOT_CONNECTED,
+                          Strings.LIVE_DEV_STATUS_TIP_PROGRESS1, Strings.LIVE_DEV_STATUS_TIP_PROGRESS2,
+                          Strings.LIVE_DEV_STATUS_TIP_CONNECTED, Strings.LIVE_DEV_STATUS_TIP_OUT_OF_SYNC];  // Status indicator tooltip
+    var _statusStyle = ["warning", "", "info", "info", "success", "out-of-sync"];  // Status indicator's CSS class
     var _allStatusStyles = _statusStyle.join(" ");
 
     var _$btnGoLive; // reference to the GoLive button
@@ -110,10 +119,19 @@ define(function main(require, exports, module) {
     function _handleGoLiveCommand() {
         if (LiveDevelopment.status >= LiveDevelopment.STATUS_CONNECTING) {
             LiveDevelopment.close();
-            // TODO Ty: when checkmark support lands, remove checkmark
         } else {
-            LiveDevelopment.open();
-            // TODO Ty: when checkmark support lands, add checkmark
+            if (!params.get("skipLiveDevelopmentInfo") && !prefs.getValue("afterFirstLaunch")) {
+                prefs.setValue("afterFirstLaunch", "true");
+                Dialogs.showModalDialog(
+                    Dialogs.DIALOG_ID_INFO,
+                    Strings.LIVE_DEVELOPMENT_INFO_TITLE,
+                    Strings.LIVE_DEVELOPMENT_INFO_MESSAGE
+                ).done(function (id) {
+                    LiveDevelopment.open();
+                });
+            } else {
+                LiveDevelopment.open();
+            }
         }
     }
 
@@ -128,31 +146,40 @@ define(function main(require, exports, module) {
             // See the comments at the top of LiveDevelopment.js for details on the 
             // various status codes.
             _setLabel(_$btnGoLive, null, _statusStyle[status + 1], _statusTooltip[status + 1]);
+            if (config.autoconnect) {
+                window.sessionStorage.setItem("live.enabled", status === 3);
+            }
         });
 
         // Initialize tooltip for 'not connected' state
         _setLabel(_$btnGoLive, null, _statusStyle[1], _statusTooltip[1]);
     }
-
-    /** Create the menu item "Highlight" */
-    function _setupHighlightButton() {
-        // TODO: this should be moved into index.html like the Go Live button once it's re-enabled
-        _$btnHighlight = $("<a href=\"#\">Highlight </a>");
-        $(".nav").append($("<li>").append(_$btnHighlight));
-        _$btnHighlight.click(function onClick() {
-            config.highlight = !config.highlight;
-            if (config.highlight) {
-                _setLabel(_$btnHighlight, _checkMark, "success");
-            } else {
-                _setLabel(_$btnHighlight);
-                LiveDevelopment.hideHighlight();
-            }
+    
+    /** Maintains state of the Live Preview menu item */
+    function _setupGoLiveMenu() {
+        $(LiveDevelopment).on("statusChange", function statusChange(event, status) {
+            // Update the checkmark next to 'Live Preview' menu item
+            // Add checkmark when status is STATUS_ACTIVE; otherwise remove it 
+            CommandManager.get(Commands.FILE_LIVE_FILE_PREVIEW).setChecked(status === LiveDevelopment.STATUS_ACTIVE);
+            CommandManager.get(Commands.FILE_LIVE_HIGHLIGHT).setEnabled(status === LiveDevelopment.STATUS_ACTIVE);
         });
-        if (config.highlight) {
-            _setLabel(_$btnHighlight, _checkMark, "success");
-        }
     }
 
+    function _updateHighlightCheckmark() {
+        CommandManager.get(Commands.FILE_LIVE_HIGHLIGHT).setChecked(config.highlight);
+    }
+    
+    function _handlePreviewHighlightCommand() {
+        config.highlight = !config.highlight;
+        _updateHighlightCheckmark();
+        if (config.highlight) {
+            LiveDevelopment.showHighlight();
+        } else {
+            LiveDevelopment.hideHighlight();
+        }
+        prefs.setValue("highlight", config.highlight);
+    }
+    
     /** Setup window references to useful LiveDevelopment modules */
     function _setupDebugHelpers() {
         window.ld = LiveDevelopment;
@@ -161,20 +188,45 @@ define(function main(require, exports, module) {
     }
 
     /** Initialize LiveDevelopment */
-    function init() {
+    AppInit.appReady(function () {
+        params.parse();
+
         Inspector.init(config);
         LiveDevelopment.init(config);
         _loadStyles();
         _setupGoLiveButton();
-        /* _setupHighlightButton(); FUTURE - Highlight button */
+        _setupGoLiveMenu();
+
+        _updateHighlightCheckmark();
+        
         if (config.debug) {
             _setupDebugHelpers();
         }
-    }
-    window.setTimeout(init);
 
+        // trigger autoconnect
+        if (config.autoconnect &&
+                window.sessionStorage.getItem("live.enabled") === "true" &&
+                DocumentManager.getCurrentDocument()) {
+            _handleGoLiveCommand();
+        }
+        
+        // Redraw highlights when window gets focus. This ensures that the highlights
+        // will be in sync with any DOM changes that may have occurred.
+        $(window).focus(function () {
+            if (Inspector.connected() && config.highlight) {
+                LiveDevelopment.redrawHighlight();
+            }
+        });
+    });
+    
+    // init prefs
+    prefs = PreferencesManager.getPreferenceStorage(PREFERENCES_KEY, {highlight: true});
+    config.highlight = prefs.getValue("highlight");
+   
+    // init commands
     CommandManager.register(Strings.CMD_LIVE_FILE_PREVIEW,  Commands.FILE_LIVE_FILE_PREVIEW, _handleGoLiveCommand);
+    CommandManager.register(Strings.CMD_LIVE_HIGHLIGHT, Commands.FILE_LIVE_HIGHLIGHT, _handlePreviewHighlightCommand);
+    CommandManager.get(Commands.FILE_LIVE_HIGHLIGHT).setEnabled(false);
 
     // Export public functions
-    exports.init = init;
 });

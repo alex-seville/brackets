@@ -43,7 +43,6 @@ define(function (require, exports, module) {
     }
     
     var liveBrowserOpenedPIDs = [];
-    var liveBrowserUserDataDir = "";
 
     /** openLiveBrowser
      *
@@ -60,7 +59,7 @@ define(function (require, exports, module) {
             } else {
                 result.reject(_browserErrToFileError(err));
             }
-        }, liveBrowserUserDataDir);
+        });
         
         return result.promise();
     }
@@ -75,9 +74,7 @@ define(function (require, exports, module) {
         if (isNaN(pid)) {
             pid = 0;
         }
-        console.log("calling to close: " + pid);
         brackets.app.closeLiveBrowser(function (err) {
-            console.log("called closing: " + pid + " with err: " + err);
             if (!err) {
                 var i = liveBrowserOpenedPIDs.indexOf(pid);
                 if (i !== -1) {
@@ -103,14 +100,6 @@ define(function (require, exports, module) {
         return Async.doSequentially(closeIDs, closeLiveBrowser, false);
     }
     
-    /** _setLiveBrowserUserDataDir
-     * For Unit Tests only, changes the default dir the browser use for it's user data
-     * @return {$.Promise}
-     */
-    function _setLiveBrowserUserDataDir(path) {
-        liveBrowserUserDataDir = path;
-    }
-    
     /**
      * Opens a URL in the system default browser
      */
@@ -124,6 +113,4 @@ define(function (require, exports, module) {
     exports.closeLiveBrowser = closeLiveBrowser;
     exports.closeAllLiveBrowsers = closeAllLiveBrowsers;
     exports.openURLInDefaultBrowser = openURLInDefaultBrowser;
-    //API for Unit Tests
-    exports._setLiveBrowserUserDataDir = _setLiveBrowserUserDataDir;
 });
